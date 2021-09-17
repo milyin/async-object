@@ -1,14 +1,14 @@
-use futures::{executor::LocalPool, Future};
+use futures::{
+    executor::{LocalPool, LocalSpawner},
+    Future,
+};
 use std::{
     any::{Any, TypeId},
-    borrow::Borrow,
-    cell::RefCell,
+    cell::{RefCell, RefMut},
     collections::{HashMap, VecDeque},
     marker::PhantomData,
-    ops::DerefMut,
     pin::Pin,
     rc::{Rc, Weak},
-    sync::WaitTimeoutResult,
     task::{Context, Poll, Waker},
 };
 use thiserror::Error;
@@ -22,10 +22,11 @@ pub enum Error {
 }
 
 #[derive(Clone)]
-struct Handle {
+pub struct Handle {
     entry_pos: usize,
-    object: Weak<RefCell<dyn Any + 'static>>,
+    object: Weak<RefCell<Box<dyn Any + 'static>>>,
     wakers: Weak<RefCell<HandleWakers>>,
+    spawner: LocalSpawner,
 }
 
 struct HandleWakers {
@@ -53,6 +54,15 @@ impl HandleWakers {
         if let Some(waker) = (&mut self.wakers).into_iter().find_map(|w| w.take()) {
             waker.wake()
         }
+    }
+}
+
+impl Drop for HandleWakers {
+    fn drop(&mut self) {
+        (&mut self.wakers)
+            .into_iter()
+            .filter_map(|w| w.take())
+            .for_each(|w| w.wake());
     }
 }
 
@@ -106,64 +116,43 @@ impl<T: Any, R, F: FnOnce(&T) -> R> HandleCall<T, R, F> {
 }
 
 impl Handle {
-    fn call<T: Any, R, F: FnOnce(&T) -> R>(&self, f: F) -> impl Future<Output = Result<R, Error>> {
+    pub fn call<T: Any, R, F: FnOnce(&T) -> R>(
+        &self,
+        f: F,
+    ) -> impl Future<Output = Result<R, Error>> {
         HandleCall::new(self.clone(), f)
+    }
+    pub fn spawner(&self) -> LocalSpawner {
+        self.spawner.clone()
     }
 }
 
 struct Entry {
     object: Rc<RefCell<Box<dyn Any + 'static>>>,
-    wakers: Rc<RefCell<Vec<Waker>>>,
-}
-
-struct Pool {
-    local_pool: LocalPool,
-    entries: Vec<Option<Entry>>,
-}
-
-/*
-struct Entry {
-    object: Box<dyn Any + 'static>,
-    events: HashMap<TypeId, VecDeque<Box<dyn Any + 'static>>>,
-    wakers: HashMap<TypeId, Vec<Waker>>,
+    wakers: Rc<RefCell<HandleWakers>>,
 }
 
 impl Entry {
-    fn new<T: Any>(object: T) -> Self {
-        Self {
-            object: Box::new(object),
-            events: HashMap::new(),
-            wakers: HashMap::new(),
+    fn new(object: impl Any + 'static) -> Self {
+        let object: Box<dyn Any + 'static> = Box::new(object);
+        let object = Rc::new(RefCell::new(object));
+        let wakers = Rc::new(RefCell::new(HandleWakers::new()));
+        Self { object, wakers }
+    }
+    fn make_handle(&self, entry_pos: usize, spawner: LocalSpawner) -> Handle {
+        Handle {
+            entry_pos,
+            object: Rc::downgrade(&self.object),
+            wakers: Rc::downgrade(&self.wakers),
+            spawner,
         }
     }
 }
 
 pub struct Pool {
     local_pool: LocalPool,
-    entries: Vec<Option<Rc<RefCell<Entry>>>>,
+    entries: Vec<Option<Entry>>,
 }
-
-pub struct ExpectEvent<T: Any> {
-    object_id: usize,
-    _phantom_event: PhantomData<T>,
-}
-
-impl<T: Any> ExpectEvent<T> {
-    pub fn new(object_id: usize) -> Self {
-        Self {
-            object_id,
-            _phantom_event: PhantomData,
-        }
-    }
-}
-
-// impl<T: Any> Future for ExpectEvent<T> {
-//     type Output = T;
-
-//     // fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {}
-// }
-
-struct ObjectId(usize);
 
 impl Pool {
     pub fn new() -> Self {
@@ -174,59 +163,33 @@ impl Pool {
             entries,
         }
     }
-
-    pub fn add_object<T: Any>(&mut self, object: T) -> ObjectId {
-        let entry = Some(Rc::new(RefCell::new(Entry::new(object))));
-        if let Some((object_id, entry_cell)) =
-            self.entries.iter_mut().enumerate().find(|v| v.1.is_none())
-        {
-            assert!(entry_cell.is_none());
-            let object_id = ObjectId(object_id);
-            *entry_cell = entry;
-            object_id
+    pub fn register_object(&mut self, object: impl Any + 'static) -> Handle {
+        let entry = Entry::new(object);
+        if let Some(pos) = self.entries.iter().position(|e| e.is_none()) {
+            let handle = entry.make_handle(pos, self.spawner());
+            self.entries[pos] = Some(entry);
+            handle
         } else {
-            let object_id = ObjectId(self.entries.len());
-            self.entries.push(entry);
-            object_id
+            let pos = self.entries.len();
+            let handle = entry.make_handle(pos, self.spawner());
+            self.entries.push(Some(entry));
+            handle
         }
     }
 
-    pub fn get_object<T: Any>(&mut self, object_id: ObjectId) -> Option<&mut T> {
-        if let Some(Some(ref mut entry)) = self.entries.get(object_id.0) {
-            entry.get_mut().object.downcast_mut::<T>()
-        } else {
-            None
-        }
+    pub fn spawner(&self) -> LocalSpawner {
+        self.local_pool.spawner()
     }
 
-    pub fn send_event(&mut self, object_id: usize, event: impl Any) {
-        if let Some(mut wakers) = self.wakers.remove(&(object_id, event.type_id())) {
-            wakers.drain(..).for_each(|w| w.wake());
-        }
-        self.events
-            .entry((object_id, event.type_id()))
-            .or_insert_with(|| VecDeque::new())
-            .push_front(Box::new(event));
+    pub fn drop_object(&mut self, handle: Handle) {
+        self.entries[handle.entry_pos] = None;
     }
-    pub fn receive_event<T: Any>(&mut self, object_id: usize) -> Option<T> {
-        let event_id = TypeId::of::<T>();
-        let event = match self.events.get_mut(&(object_id, event_id)) {
-            Some(events) => events.pop_back(),
-            None => None,
-        };
-        if let Some(event) = event {
-            if let Ok(t) = event.downcast::<T>() {
-                Some(*t)
-            } else {
-                panic!("unexpected event type")
-            }
-        } else {
-            None
-        }
+
+    pub fn run_until_stalled(&mut self) {
+        self.local_pool.run_until_stalled()
     }
-    pub async fn expect_event<T: Any>(&mut self, object_id: usize) -> T {}
 }
-*/
+
 #[cfg(test)]
 mod tests {
     #[test]
