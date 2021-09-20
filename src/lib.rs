@@ -76,7 +76,6 @@ where
 {
     handle: Handle,
     func: Option<Either<Box<F>, Box<FMut>>>,
-    waker_pos: Option<usize>,
     _phantom: PhantomData<Box<(T, R)>>,
 }
 
@@ -104,7 +103,6 @@ where
         Self {
             handle,
             func: Some(Either::F(Box::new(func))),
-            waker_pos: None,
             _phantom: PhantomData,
         }
     }
@@ -112,7 +110,6 @@ where
         Self {
             handle,
             func: Some(Either::Fmut(Box::new(func))),
-            waker_pos: None,
             _phantom: PhantomData,
         }
     }
