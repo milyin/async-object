@@ -3,9 +3,8 @@ use futures::{
     Future,
 };
 use std::{
-    any::{Any, TypeId},
-    cell::{RefCell, RefMut},
-    collections::{HashMap, VecDeque},
+    any::Any,
+    cell::RefCell,
     marker::PhantomData,
     pin::Pin,
     rc::{Rc, Weak},
@@ -17,8 +16,6 @@ use thiserror::Error;
 pub enum Error {
     #[error("Object not exists")]
     ObjectNotExists,
-    #[error("Wrong object type requested")]
-    ObjectWrongType,
 }
 
 #[derive(Clone)]
@@ -66,52 +63,87 @@ impl Drop for HandleWakers {
     }
 }
 
-struct HandleCall<T: Any, R, F: FnOnce(&T) -> R> {
+enum Either<F, FMut> {
+    F(F),
+    Fmut(FMut),
+}
+
+struct HandleCall<T, R, F, FMut>
+where
+    T: Any,
+    F: FnOnce(&T) -> R,
+    FMut: FnOnce(&mut T) -> R,
+{
     handle: Handle,
-    func: Option<Box<F>>,
+    func: Option<Either<Box<F>, Box<FMut>>>,
     waker_pos: Option<usize>,
     _phantom: PhantomData<Box<(T, R)>>,
 }
 
-impl<T: Any, R, F: FnOnce(&T) -> R> Future for HandleCall<T, R, F> {
-    type Output = Result<R, Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        let res = if let Some(object) = this.handle.object.upgrade() {
-            if let Ok(object) = object.try_borrow() {
-                if let Some(object) = object.downcast_ref::<T>() {
-                    let func = this.func.take().unwrap();
-                    Poll::Ready(Ok(func(object)))
-                } else {
-                    Poll::Ready(Err(Error::ObjectWrongType))
-                }
-            } else {
-                let wakers = this.handle.wakers.upgrade().unwrap();
-                let mut wakers = wakers.try_borrow_mut().unwrap();
-                wakers.set_waker(&mut this.waker_pos, cx.waker().clone());
-                Poll::Pending
-            }
-        } else {
-            Poll::Ready(Err(Error::ObjectNotExists))
-        };
-        if res.is_ready() {
-            let wakers = this.handle.wakers.upgrade().unwrap();
-            let mut wakers = wakers.try_borrow_mut().unwrap();
-            wakers.wake();
-        }
-        res
-    }
+fn new_handle_call<T: Any, R, F: FnOnce(&T) -> R>(
+    handle: Handle,
+    f: F,
+) -> HandleCall<T, R, F, fn(&mut T) -> R> {
+    HandleCall::new(handle, f)
 }
 
-impl<T: Any, R, F: FnOnce(&T) -> R> HandleCall<T, R, F> {
+fn new_handle_call_mut<T: Any, R, FMut: FnOnce(&mut T) -> R>(
+    handle: Handle,
+    f: FMut,
+) -> HandleCall<T, R, fn(&T) -> R, FMut> {
+    HandleCall::new_mut(handle, f)
+}
+
+impl<T, R, F, FMut> HandleCall<T, R, F, FMut>
+where
+    T: Any,
+    F: FnOnce(&T) -> R,
+    FMut: FnOnce(&mut T) -> R,
+{
     fn new(handle: Handle, func: F) -> Self {
         Self {
             handle,
-            func: Some(Box::new(func)),
+            func: Some(Either::F(Box::new(func))),
             waker_pos: None,
             _phantom: PhantomData,
         }
+    }
+    fn new_mut(handle: Handle, func: FMut) -> Self {
+        Self {
+            handle,
+            func: Some(Either::Fmut(Box::new(func))),
+            waker_pos: None,
+            _phantom: PhantomData,
+        }
+    }
+    fn poll(&mut self) -> Poll<Result<R, Error>> {
+        let object = if let Some(object) = self.handle.object.upgrade() {
+            object
+        } else {
+            return Poll::Ready(Err(Error::ObjectNotExists));
+        };
+        let result = match self.func.take().unwrap() {
+            Either::F(func) => {
+                let object = object.borrow();
+                let object = object.downcast_ref::<T>().expect("wrong type");
+                func(object)
+            }
+            Either::Fmut(func_mut) => {
+                let mut object = object.borrow_mut();
+                let object = object.downcast_mut::<T>().expect("wrong type");
+                func_mut(object)
+            }
+        };
+        Poll::Ready(Ok(result))
+    }
+}
+
+impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
+    for HandleCall<T, R, F, FMut>
+{
+    type Output = Result<R, Error>;
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().poll()
     }
 }
 
@@ -120,7 +152,13 @@ impl Handle {
         &self,
         f: F,
     ) -> impl Future<Output = Result<R, Error>> {
-        HandleCall::new(self.clone(), f)
+        new_handle_call(self.clone(), f)
+    }
+    pub fn call_mut<T: Any, R, F: FnOnce(&mut T) -> R>(
+        &self,
+        f: F,
+    ) -> impl Future<Output = Result<R, Error>> {
+        new_handle_call_mut(self.clone(), f)
     }
     pub fn spawner(&self) -> LocalSpawner {
         self.spawner.clone()
