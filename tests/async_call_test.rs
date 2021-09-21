@@ -1,36 +1,32 @@
-use std::{cell::RefCell, rc::Rc};
-
-use futures::{executor::LocalSpawner, task::LocalSpawnExt};
 use loopa::{self, Handle, Pool};
+use std::{cell::RefCell, rc::Rc};
 
 struct Counter {
     value: usize,
 }
 
 impl Counter {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self { value: 0 }
     }
-    pub fn inc(&mut self) {
+    fn inc(&mut self) {
         self.value += 1;
     }
-    pub fn value(&self) -> usize {
+    fn value(&self) -> usize {
         self.value
     }
 }
 
+#[derive(Clone)]
 struct HCounter(Handle);
 
 impl HCounter {
     pub fn new(pool: &mut Pool) -> Self {
         HCounter(pool.register_object(Counter::new()))
     }
-    pub fn spawner(&self) -> LocalSpawner {
-        self.0.spawner()
+    pub async fn inc(&self) -> Result<(), loopa::Error> {
+        self.0.call_mut(|counter: &mut Counter| counter.inc()).await
     }
-    // pub async fn inc(&self) -> Result<(), loopa::Error> {
-    //     self.0.call(|counter: &mut Counter| counter.inc()).await
-    // }
     pub async fn value(&self) -> Result<usize, loopa::Error> {
         self.0.call(|counter: &Counter| counter.value()).await
     }
@@ -42,10 +38,29 @@ fn handle_call() {
     let value_r = value.clone();
     let mut pool = Pool::new();
     let hcounter = HCounter::new(&mut pool);
-    hcounter
-        .spawner()
-        .spawn_local(async move { *(value.borrow_mut()) = Some(hcounter.value().await) })
-        .unwrap();
+    let future = async move {
+        let v = hcounter.value().await?;
+        *(value.borrow_mut()) = Some(v);
+        Ok(())
+    };
+    loopa::spawn::<loopa::Error, _>(pool.spawner(), future);
     pool.run_until_stalled();
     assert!(value_r.borrow().is_some())
+}
+
+#[test]
+fn handle_call_mut() {
+    let value = Rc::new(RefCell::new(0));
+    let value_r = value.clone();
+    let mut pool = Pool::new();
+    let hcounter = HCounter::new(&mut pool);
+    let future = async move {
+        hcounter.inc().await?;
+        let v = hcounter.value().await?;
+        *(value.borrow_mut()) = v;
+        Ok(())
+    };
+    loopa::spawn::<loopa::Error, _>(pool.spawner(), future);
+    pool.run_until_stalled();
+    assert!(*value_r.borrow() == 1)
 }

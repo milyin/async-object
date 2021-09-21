@@ -1,10 +1,12 @@
 use futures::{
     executor::{LocalPool, LocalSpawner},
+    task::LocalSpawnExt,
     Future,
 };
 use std::{
     any::Any,
     cell::RefCell,
+    fmt,
     marker::PhantomData,
     pin::Pin,
     rc::{Rc, Weak},
@@ -23,7 +25,6 @@ pub struct Handle {
     entry_pos: usize,
     object: Weak<RefCell<Box<dyn Any + 'static>>>,
     wakers: Weak<RefCell<HandleWakers>>,
-    spawner: LocalSpawner,
 }
 
 struct HandleWakers {
@@ -157,9 +158,6 @@ impl Handle {
     ) -> impl Future<Output = Result<R, Error>> {
         new_handle_call_mut(self.clone(), f)
     }
-    pub fn spawner(&self) -> LocalSpawner {
-        self.spawner.clone()
-    }
 }
 
 struct Entry {
@@ -179,7 +177,6 @@ impl Entry {
             entry_pos,
             object: Rc::downgrade(&self.object),
             wakers: Rc::downgrade(&self.wakers),
-            spawner,
         }
     }
 }
@@ -225,10 +222,10 @@ impl Pool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
+pub fn spawn<E: fmt::Debug, FUTURE: Future<Output = Result<(), E>> + 'static>(
+    spawner: LocalSpawner,
+    f: FUTURE,
+) {
+    let future = async move { f.await.expect("spawned task failed") };
+    spawner.spawn_local(future).expect("spawner failed");
 }
