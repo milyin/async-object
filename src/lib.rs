@@ -172,7 +172,7 @@ impl Entry {
         let wakers = Rc::new(RefCell::new(HandleWakers::new()));
         Self { object, wakers }
     }
-    fn make_handle(&self, entry_pos: usize, spawner: LocalSpawner) -> Handle {
+    fn make_handle(&self, entry_pos: usize) -> Handle {
         Handle {
             entry_pos,
             object: Rc::downgrade(&self.object),
@@ -198,12 +198,12 @@ impl Pool {
     pub fn register_object(&mut self, object: impl Any + 'static) -> Handle {
         let entry = Entry::new(object);
         if let Some(pos) = self.entries.iter().position(|e| e.is_none()) {
-            let handle = entry.make_handle(pos, self.spawner());
+            let handle = entry.make_handle(pos);
             self.entries[pos] = Some(entry);
             handle
         } else {
             let pos = self.entries.len();
-            let handle = entry.make_handle(pos, self.spawner());
+            let handle = entry.make_handle(pos);
             self.entries.push(Some(entry));
             handle
         }
