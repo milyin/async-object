@@ -1,11 +1,12 @@
 use futures::{
     executor::{LocalPool, LocalSpawner},
     task::LocalSpawnExt,
-    Future,
+    Future, Stream,
 };
 use std::{
     any::Any,
     cell::RefCell,
+    collections::VecDeque,
     fmt,
     marker::PhantomData,
     pin::Pin,
@@ -24,46 +25,94 @@ pub enum Error {
 pub struct Handle {
     entry_pos: usize,
     object: Weak<RefCell<Box<dyn Any + 'static>>>,
-    wakers: Weak<RefCell<HandleWakers>>,
+    subscribers: Weak<RefCell<EventSubscribers>>,
 }
 
-struct HandleWakers {
-    wakers: Vec<Option<Waker>>,
+struct EventSubscribers {
+    subscribers: Vec<Weak<RefCell<EventQueue>>>,
 }
 
-impl HandleWakers {
+impl EventSubscribers {
     fn new() -> Self {
-        Self { wakers: Vec::new() }
+        Self {
+            subscribers: Vec::new(),
+        }
     }
-
-    fn set_waker(&mut self, pos: &mut Option<usize>, waker: Waker) {
-        if let Some(pos) = pos {
-            self.wakers[*pos] = Some(waker)
-        } else if let Some(free_pos) = self.wakers.iter().position(|w| w.is_none()) {
-            *pos = Some(free_pos);
-            self.wakers[free_pos] = Some(waker)
+    fn subscribe(&mut self, event_queue: Weak<RefCell<EventQueue>>) {
+        if let Some(empty) = self.subscribers.iter_mut().find(|w| w.strong_count() == 0) {
+            *empty = event_queue;
         } else {
-            *pos = Some(self.wakers.len());
-            self.wakers.push(Some(waker))
+            self.subscribers.push(event_queue);
+        };
+    }
+    fn send_event<EVT: Any + Clone + 'static>(&mut self, event: EVT) {
+        self.subscribers
+            .iter()
+            .filter_map(|event_queue| event_queue.upgrade())
+            .for_each(|event_queue| event_queue.borrow_mut().send_event(event.clone()));
+    }
+}
+
+struct EventQueue {
+    waker: Option<Waker>,
+    events: VecDeque<Box<dyn Any + 'static>>,
+}
+
+impl EventQueue {
+    fn new() -> Self {
+        Self {
+            waker: None,
+            events: VecDeque::new(),
         }
     }
+    fn send_event<EVT: Any + 'static>(&mut self, event: EVT) {
+        self.events.push_back(Box::new(event));
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
+    }
+    fn get_event<EVT: Any>(&mut self) -> Option<EVT> {
+        self.events.pop_front().map(|evt| *evt.downcast().unwrap())
+    }
+}
 
-    fn wake(&mut self) {
-        if let Some(waker) = (&mut self.wakers).into_iter().find_map(|w| w.take()) {
-            waker.wake()
+struct EventSource<EVT: Any> {
+    object: Weak<RefCell<Box<dyn Any + 'static>>>,
+    event_queue: Rc<RefCell<EventQueue>>,
+    _phantom: PhantomData<Box<EVT>>,
+}
+
+impl<EVT: Any> EventSource<EVT> {
+    fn new(handle: Handle) -> Self {
+        let event_queue = Rc::new(RefCell::new(EventQueue::new()));
+        let weak_event_queue = Rc::downgrade(&mut (event_queue.clone()));
+        handle.subscribe(weak_event_queue);
+        Self {
+            object: handle.object.clone(),
+            event_queue,
+            _phantom: PhantomData,
+        }
+    }
+    fn poll_next(self: &mut Self, cx: &mut Context<'_>) -> Poll<Option<EVT>> {
+        let mut event_queue = self.event_queue.borrow_mut();
+        event_queue.waker = Some(cx.waker().clone());
+        if let Some(evt) = event_queue.get_event::<EVT>() {
+            Poll::Ready(Some(evt))
+        } else if self.object.strong_count() == 0 {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
         }
     }
 }
 
-impl Drop for HandleWakers {
-    fn drop(&mut self) {
-        (&mut self.wakers)
-            .into_iter()
-            .filter_map(|w| w.take())
-            .for_each(|w| w.wake());
+impl<EVT: Any> Stream for EventSource<EVT> {
+    type Item = EVT;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<EVT>> {
+        self.get_mut().poll_next(cx)
     }
 }
-
 enum Either<F, FMut> {
     F(F),
     Fmut(FMut),
@@ -158,25 +207,38 @@ impl Handle {
     ) -> impl Future<Output = Result<R, Error>> {
         new_handle_call_mut(self.clone(), f)
     }
+    fn subscribe(&self, event_queue: Weak<RefCell<EventQueue>>) {
+        if let Some(subscribers) = self.subscribers.upgrade() {
+            subscribers.borrow_mut().subscribe(event_queue)
+        }
+    }
+    pub fn get_event<EVT: Any>(&self) -> impl Stream<Item = EVT> {
+        EventSource::new(self.clone())
+    }
+    pub fn send_event<EVT: Any>(&self) {}
 }
 
 struct Entry {
     object: Rc<RefCell<Box<dyn Any + 'static>>>,
-    wakers: Rc<RefCell<HandleWakers>>,
+    subscribers: Rc<RefCell<EventSubscribers>>,
 }
 
 impl Entry {
     fn new(object: impl Any + 'static) -> Self {
         let object: Box<dyn Any + 'static> = Box::new(object);
         let object = Rc::new(RefCell::new(object));
-        let wakers = Rc::new(RefCell::new(HandleWakers::new()));
-        Self { object, wakers }
+        let subscribers = Rc::new(RefCell::new(EventSubscribers::new()));
+
+        Self {
+            object,
+            subscribers,
+        }
     }
     fn make_handle(&self, entry_pos: usize) -> Handle {
         Handle {
             entry_pos,
             object: Rc::downgrade(&self.object),
-            wakers: Rc::downgrade(&self.wakers),
+            subscribers: Rc::downgrade(&self.subscribers),
         }
     }
 }
