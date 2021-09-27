@@ -21,19 +21,12 @@ pub enum Error {
     ObjectNotExists,
 }
 
-#[derive(Clone)]
-pub struct Handle {
-    entry_pos: usize,
-    object: Weak<RefCell<Box<dyn Any + 'static>>>,
-    subscribers: Weak<RefCell<EventSubscribers>>,
-}
-
-struct EventSubscribers {
+pub struct EventSubscribers {
     subscribers: Vec<Weak<RefCell<EventQueue>>>,
 }
 
 impl EventSubscribers {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             subscribers: Vec::new(),
         }
@@ -45,7 +38,7 @@ impl EventSubscribers {
             self.subscribers.push(event_queue);
         };
     }
-    fn send_event<EVT: Any + Clone + 'static>(&mut self, event: EVT) {
+    pub fn send_event<EVT: Any + Clone + 'static>(&mut self, event: EVT) {
         self.subscribers
             .iter()
             .filter_map(|event_queue| event_queue.upgrade())
@@ -77,7 +70,7 @@ impl EventQueue {
 }
 
 struct EventSource<EVT: Any> {
-    object: Weak<RefCell<Box<dyn Any + 'static>>>,
+    object: Weak<RefCell<dyn Any + 'static>>,
     event_queue: Rc<RefCell<EventQueue>>,
     _phantom: PhantomData<Box<EVT>>,
 }
@@ -194,7 +187,23 @@ impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
     }
 }
 
+#[derive(Clone)]
+pub struct Handle {
+    object: Weak<RefCell<dyn Any + 'static>>,
+    subscribers: Weak<RefCell<EventSubscribers>>,
+}
+
 impl Handle {
+    pub fn new(
+        object: Weak<RefCell<dyn Any + 'static>>,
+        subscribers: Weak<RefCell<EventSubscribers>>,
+    ) -> Self {
+        Self {
+            object,
+            subscribers,
+        }
+    }
+
     pub fn call<T: Any, R, F: FnOnce(&T) -> R>(
         &self,
         f: F,
@@ -215,72 +224,10 @@ impl Handle {
     pub fn get_event<EVT: Any>(&self) -> impl Stream<Item = EVT> {
         EventSource::new(self.clone())
     }
-    pub fn send_event<EVT: Any>(&self) {}
-}
-
-struct Entry {
-    object: Rc<RefCell<Box<dyn Any + 'static>>>,
-    subscribers: Rc<RefCell<EventSubscribers>>,
-}
-
-impl Entry {
-    fn new(object: impl Any + 'static) -> Self {
-        let object: Box<dyn Any + 'static> = Box::new(object);
-        let object = Rc::new(RefCell::new(object));
-        let subscribers = Rc::new(RefCell::new(EventSubscribers::new()));
-
-        Self {
-            object,
-            subscribers,
+    pub fn send_event<EVT: Any + Clone + 'static>(&self, event: EVT) {
+        if let Some(subscribers) = self.subscribers.upgrade() {
+            subscribers.borrow_mut().send_event(event)
         }
-    }
-    fn make_handle(&self, entry_pos: usize) -> Handle {
-        Handle {
-            entry_pos,
-            object: Rc::downgrade(&self.object),
-            subscribers: Rc::downgrade(&self.subscribers),
-        }
-    }
-}
-
-pub struct Pool {
-    local_pool: LocalPool,
-    entries: Vec<Option<Entry>>,
-}
-
-impl Pool {
-    pub fn new() -> Self {
-        let local_pool = LocalPool::new();
-        let entries = Vec::new();
-        Self {
-            local_pool,
-            entries,
-        }
-    }
-    pub fn register_object(&mut self, object: impl Any + 'static) -> Handle {
-        let entry = Entry::new(object);
-        if let Some(pos) = self.entries.iter().position(|e| e.is_none()) {
-            let handle = entry.make_handle(pos);
-            self.entries[pos] = Some(entry);
-            handle
-        } else {
-            let pos = self.entries.len();
-            let handle = entry.make_handle(pos);
-            self.entries.push(Some(entry));
-            handle
-        }
-    }
-
-    pub fn spawner(&self) -> LocalSpawner {
-        self.local_pool.spawner()
-    }
-
-    pub fn drop_object(&mut self, handle: Handle) {
-        self.entries[handle.entry_pos] = None;
-    }
-
-    pub fn run_until_stalled(&mut self) {
-        self.local_pool.run_until_stalled()
     }
 }
 
