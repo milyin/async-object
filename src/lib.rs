@@ -1,13 +1,8 @@
-use futures::{
-    executor::{LocalPool, LocalSpawner},
-    task::LocalSpawnExt,
-    Future, Stream,
-};
+use futures::{Future, Stream};
 use std::{
     any::Any,
     cell::RefCell,
     collections::VecDeque,
-    fmt,
     marker::PhantomData,
     pin::Pin,
     rc::{Rc, Weak},
@@ -229,12 +224,4 @@ impl Handle {
             subscribers.borrow_mut().send_event(event)
         }
     }
-}
-
-pub fn spawn<E: fmt::Debug, FUTURE: Future<Output = Result<(), E>> + 'static>(
-    spawner: LocalSpawner,
-    f: FUTURE,
-) {
-    let future = async move { f.await.expect("spawned task failed") };
-    spawner.spawn_local(future).expect("spawner failed");
 }
