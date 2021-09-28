@@ -6,7 +6,9 @@ use loopa::{self, EventSubscribers, Handle};
 use std::{
     any::Any,
     cell::RefCell,
-    rc::{Rc, Weak},
+    rc::Rc,
+    sync::{Arc, RwLock, Weak},
+    task::Waker,
 };
 
 #[derive(Clone)]
@@ -15,26 +17,29 @@ enum CounterEvent {
 }
 struct Counter {
     value: usize,
-    subscribers: Rc<RefCell<EventSubscribers>>,
-    object: Weak<RefCell<Counter>>,
+    subscribers: Arc<RwLock<EventSubscribers>>,
+    call_wakers: Arc<RwLock<Vec<Waker>>>,
+    object: Weak<RwLock<Counter>>,
 }
 
 impl Counter {
-    pub fn new() -> Rc<RefCell<Self>> {
+    pub fn new() -> Arc<RwLock<Self>> {
         let this = Self {
             value: 0,
-            subscribers: Rc::new(RefCell::new(EventSubscribers::new())),
+            subscribers: Arc::new(RwLock::new(EventSubscribers::new())),
+            call_wakers: Arc::new(RwLock::new(Vec::new())),
             object: Weak::new(),
         };
-        let pthis = Rc::new(RefCell::new(this));
-        let weak_pthis = Rc::downgrade(&pthis);
-        pthis.borrow_mut().object = weak_pthis;
+        let pthis = Arc::new(RwLock::new(this));
+        let weak_pthis = Arc::downgrade(&pthis);
+        pthis.write().unwrap().object = weak_pthis;
         pthis
     }
     pub fn handle(&self) -> HCounter {
-        let object = self.object.clone() as Weak<RefCell<dyn Any>>;
-        let subscribers = Rc::downgrade(&self.subscribers);
-        HCounter(Handle::new(object, subscribers))
+        let object = self.object.clone() as Weak<RwLock<dyn Any>>;
+        let subscribers = Arc::downgrade(&self.subscribers);
+        let call_wakers = Arc::downgrade(&self.call_wakers);
+        HCounter(Handle::new(object, subscribers, call_wakers))
     }
     fn inc(&mut self) {
         self.value += 1;
@@ -61,7 +66,7 @@ fn test_handle_call() {
     let value = Rc::new(RefCell::new(None));
     let value_r = value.clone();
     let counter = Counter::new();
-    let hcounter = counter.borrow().handle();
+    let hcounter = counter.read().unwrap().handle();
     let future = async move {
         let v = hcounter.value().await.unwrap();
         *(value.borrow_mut()) = Some(v);
