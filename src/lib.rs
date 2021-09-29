@@ -252,3 +252,28 @@ impl Handle {
         }
     }
 }
+
+pub struct HandleSupport<T: Any + 'static> {
+    subscribers: Arc<RwLock<EventSubscribers>>,
+    call_wakers: Arc<RwLock<Vec<Waker>>>,
+    object: Weak<RwLock<T>>,
+}
+
+impl<T: Any + 'static> HandleSupport<T> {
+    pub fn new() -> Self {
+        Self {
+            subscribers: Arc::new(RwLock::new(EventSubscribers::new())),
+            call_wakers: Arc::new(RwLock::new(Vec::new())),
+            object: Weak::new(),
+        }
+    }
+    pub fn set_object(&mut self, object: &Arc<RwLock<T>>) {
+        self.object = Arc::downgrade(object)
+    }
+    pub fn handle(&self) -> Handle {
+        let object = self.object.clone() as Weak<RwLock<dyn Any>>;
+        let subscribers = Arc::downgrade(&self.subscribers);
+        let call_wakers = Arc::downgrade(&self.call_wakers);
+        Handle::new(object, subscribers, call_wakers)
+    }
+}

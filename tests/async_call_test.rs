@@ -2,7 +2,7 @@ use futures::{
     executor::{LocalPool, LocalSpawner},
     task::LocalSpawnExt,
 };
-use loopa::{self, EventSubscribers, Handle};
+use loopa::{self, EventSubscribers, Handle, HandleSupport};
 use std::{
     any::Any,
     cell::RefCell,
@@ -17,34 +17,25 @@ enum CounterEvent {
 }
 struct Counter {
     value: usize,
-    subscribers: Arc<RwLock<EventSubscribers>>,
-    call_wakers: Arc<RwLock<Vec<Waker>>>,
-    object: Weak<RwLock<Counter>>,
+    handle_support: HandleSupport<Self>,
 }
 
 impl Counter {
     pub fn new() -> Arc<RwLock<Self>> {
-        let this = Self {
+        let this = Arc::new(RwLock::new(Self {
             value: 0,
-            subscribers: Arc::new(RwLock::new(EventSubscribers::new())),
-            call_wakers: Arc::new(RwLock::new(Vec::new())),
-            object: Weak::new(),
-        };
-        let pthis = Arc::new(RwLock::new(this));
-        let weak_pthis = Arc::downgrade(&pthis);
-        pthis.write().unwrap().object = weak_pthis;
-        pthis
+            handle_support: HandleSupport::new(),
+        }));
+        this.write().unwrap().handle_support.set_object(&this);
+        this
     }
     pub fn handle(&self) -> HCounter {
-        let object = self.object.clone() as Weak<RwLock<dyn Any>>;
-        let subscribers = Arc::downgrade(&self.subscribers);
-        let call_wakers = Arc::downgrade(&self.call_wakers);
-        HCounter(Handle::new(object, subscribers, call_wakers))
+        HCounter(self.handle_support.handle())
     }
-    fn inc(&mut self) {
+    pub fn inc(&mut self) {
         self.value += 1;
     }
-    fn value(&self) -> usize {
+    pub fn value(&self) -> usize {
         self.value
     }
 }
