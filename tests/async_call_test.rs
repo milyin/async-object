@@ -26,7 +26,7 @@ impl Counter {
             value: 0,
             handle_support: HandleSupport::new(),
         }));
-        this.write().unwrap().handle_support.set_object(&this);
+        this.write().unwrap().handle_support.init(&this);
         this
     }
     pub fn handle(&self) -> HCounter {
