@@ -1,10 +1,11 @@
 use std::sync::{mpsc::channel, Arc, RwLock};
 
 use futures::{executor::ThreadPool, join, task::SpawnExt, Stream, StreamExt};
-use loopa::{Handle, HandleSupport};
+use loopa::{EventStream, Handle, Keeper};
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
 enum FizzBuzz {
+    Expected,
     Number,
     Fizz,
     Buzz,
@@ -13,17 +14,11 @@ enum FizzBuzz {
 
 struct Sink {
     values: Vec<Option<FizzBuzz>>,
-    hsupport: HandleSupport<Self>,
 }
 
 impl Sink {
-    pub fn new() -> (Arc<RwLock<Self>>, HSink) {
-        let this = Arc::new(RwLock::new(Self {
-            values: Vec::new(),
-            hsupport: HandleSupport::new(),
-        }));
-        let handle = HSink(this.write().unwrap().hsupport.init(&this));
-        (this, handle)
+    pub fn new() -> Self {
+        Self { values: Vec::new() }
     }
     pub fn set_value(&mut self, pos: usize, value: FizzBuzz) {
         if pos >= self.values.len() {
@@ -36,50 +31,78 @@ impl Sink {
         } else {
             self.values[pos] = Some(value)
         }
-        dbg!(pos, value);
+    }
+    pub fn validate(&self) -> bool {
+        for (n, res) in self.values.iter().enumerate() {
+            dbg!(n, res);
+            if let Some(res) = res {
+                let expected = match (n % 5 == 0, n % 3 == 0) {
+                    (true, true) => FizzBuzz::FizzBuzz,
+                    (true, false) => FizzBuzz::Buzz,
+                    (false, true) => FizzBuzz::Fizz,
+                    (false, false) => FizzBuzz::Number,
+                };
+                if *res != expected {
+                    return false;
+                }
+            }
+        }
+        true
     }
 }
 
 #[derive(Clone)]
 struct HSink(Handle<Sink>);
 
+impl From<Handle<Sink>> for HSink {
+    fn from(h: Handle<Sink>) -> Self {
+        HSink(h)
+    }
+}
+
 impl HSink {
-    pub async fn set_value(&self, pos: usize, value: FizzBuzz) -> Result<(), loopa::Error> {
-        self.0
-            .call_mut(|sink: &mut Sink| sink.set_value(pos, value))
-            .await
+    async fn set_value(&self, pos: usize, value: FizzBuzz) -> Result<(), loopa::Error> {
+        self.0.call_mut(|sink| sink.set_value(pos, value)).await
     }
 }
 
-#[derive(Debug)]
-struct Generator {
-    hsupport: HandleSupport<Self>,
+struct KSink(Keeper<Sink>);
+
+impl KSink {
+    pub fn new() -> Self {
+        Self(Keeper::new(Sink::new()))
+    }
+    pub fn handle(&self) -> HSink {
+        HSink(self.0.handle())
+    }
 }
 
-impl Generator {
-    pub fn new() -> (Arc<RwLock<Self>>, HGenerator) {
-        let this = Arc::new(RwLock::new(Self {
-            hsupport: HandleSupport::new(),
-        }));
-        let handle = HGenerator(this.write().unwrap().hsupport.init(&this));
-        (this, handle)
-    }
-    pub fn send_value(&mut self, value: usize) {
-        self.hsupport.send_event::<usize>(value)
+impl AsRef<Arc<RwLock<Sink>>> for KSink {
+    fn as_ref(&self) -> &Arc<RwLock<Sink>> {
+        self.0.as_ref()
     }
 }
+
+struct Generator;
 
 #[derive(Clone)]
 struct HGenerator(Handle<Generator>);
-
 impl HGenerator {
-    pub fn values(&self) -> impl Stream<Item = usize> {
-        self.0.get_event::<usize>()
+    fn values(&self) -> impl Stream<Item = usize> {
+        EventStream::new(self.0.clone())
     }
-    pub async fn send_value(&self, value: usize) -> Result<(), loopa::Error> {
-        self.0
-            .call_mut(|generator: &mut Generator| generator.send_value(value))
-            .await
+    fn send_value(&self, value: usize) {
+        self.0.send_event(value)
+    }
+}
+
+struct KGenerator(Keeper<Generator>);
+impl KGenerator {
+    pub fn new() -> Self {
+        Self(Keeper::new(Generator {}))
+    }
+    pub fn handle(&self) -> HGenerator {
+        HGenerator(self.0.handle())
     }
 }
 
@@ -88,18 +111,18 @@ fn fizz_buzz_threadpool() {
     let pool = ThreadPool::builder() /*.pool_size(8)*/
         .create()
         .unwrap();
-    let (_sink, hsink) = Sink::new();
+    let ksink = KSink::new();
+    let hsink = ksink.handle();
     {
-        let (generator, hgenerator) = Generator::new();
+        let kgenerator = KGenerator::new();
+        let hgenerator = kgenerator.handle();
         let task_nums = {
             let mut values = hgenerator.values();
             let hsink = hsink.clone();
             pool.spawn_with_handle(async move {
-                dbg!("Start nums");
                 while let Some(n) = values.next().await {
                     hsink.set_value(n, FizzBuzz::Number).await.unwrap();
                 }
-                dbg!("End nums");
             })
             .unwrap()
         };
@@ -107,13 +130,11 @@ fn fizz_buzz_threadpool() {
             let hsink = hsink.clone();
             let mut values = hgenerator.values();
             pool.spawn_with_handle(async move {
-                dbg!("Start fizz");
                 while let Some(n) = values.next().await {
                     if n % 3 == 0 {
                         hsink.set_value(n, FizzBuzz::Fizz).await.unwrap();
                     }
                 }
-                dbg!("End fizz");
             })
             .unwrap()
         };
@@ -121,13 +142,11 @@ fn fizz_buzz_threadpool() {
             let hsink = hsink.clone();
             let mut values = hgenerator.values();
             pool.spawn_with_handle(async move {
-                dbg!("Start buzz");
                 while let Some(n) = values.next().await {
                     if n % 5 == 0 {
                         hsink.set_value(n, FizzBuzz::Buzz).await.unwrap();
                     }
                 }
-                dbg!("End buzz");
             })
             .unwrap()
         };
@@ -135,23 +154,21 @@ fn fizz_buzz_threadpool() {
             let hsink = hsink.clone();
             let mut values = hgenerator.values();
             pool.spawn_with_handle(async move {
-                dbg!("Start fizzbuzz");
                 while let Some(n) = values.next().await {
                     if n % 5 == 0 && n % 3 == 0 {
                         hsink.set_value(n, FizzBuzz::FizzBuzz).await.unwrap();
                     }
                 }
-                dbg!("End fizzbuzz");
             })
             .unwrap()
         };
 
         pool.spawn_ok(async move {
             for n in 1..100 {
-                dbg!(n);
-                hgenerator.send_value(n).await.unwrap();
+                hsink.set_value(n, FizzBuzz::Expected).await.unwrap();
+                hgenerator.send_value(n);
             }
-            drop(generator);
+            drop(kgenerator);
         });
 
         let (tx, rx) = channel();
@@ -161,4 +178,5 @@ fn fizz_buzz_threadpool() {
         });
         let _ = rx.recv().unwrap();
     }
+    assert!(ksink.as_ref().read().unwrap().validate());
 }

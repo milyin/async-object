@@ -17,37 +17,30 @@ enum CounterEvent {
 }
 struct Counter {
     value: usize,
-    handle_support: HandleSupport<Self>,
+}
+
+trait Counter {
+    async fn inc(&self) -> Result<(), loopa::Error>;
+    async fn value(&self) -> Result<usize, loopa::Error>;
 }
 
 impl Counter {
-    pub fn new() -> Arc<RwLock<Self>> {
-        let this = Arc::new(RwLock::new(Self {
-            value: 0,
-            handle_support: HandleSupport::new(),
-        }));
-        this.write().unwrap().handle_support.init(&this);
-        this
+    pub fn new() -> Self {
+        Self { value: 0 }
     }
-    pub fn handle(&self) -> HCounter {
-        HCounter(self.handle_support.handle())
-    }
-    pub fn inc(&mut self) {
+    fn inc(&mut self) {
         self.value += 1;
     }
-    pub fn value(&self) -> usize {
+    fn value(&self) -> usize {
         self.value
     }
 }
 
-#[derive(Clone)]
-struct HCounter(Handle);
-
-impl HCounter {
-    pub async fn inc(&self) -> Result<(), loopa::Error> {
+impl Counter for Handle<Counter> {
+    async fn inc(&self) -> Result<(), loopa::Error> {
         self.0.call_mut(|counter: &mut Counter| counter.inc()).await
     }
-    pub async fn value(&self) -> Result<usize, loopa::Error> {
+    async fn value(&self) -> Result<usize, loopa::Error> {
         self.0.call(|counter: &Counter| counter.value()).await
     }
 }
