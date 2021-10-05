@@ -1,5 +1,5 @@
+use async_object::{self, Handle, Keeper};
 use futures::{executor::LocalPool, task::LocalSpawnExt};
-use loopa::{self, Handle, Keeper};
 use std::{cell::RefCell, rc::Rc};
 
 struct Counter {
@@ -21,10 +21,10 @@ impl Counter {
 struct HCounter(Handle<Counter>);
 
 impl HCounter {
-    async fn inc(&self) -> Result<(), loopa::Error> {
+    async fn inc(&self) -> Result<(), async_object::Error> {
         self.0.call_mut(|counter: &mut Counter| counter.inc()).await
     }
-    async fn value(&self) -> Result<usize, loopa::Error> {
+    async fn value(&self) -> Result<usize, async_object::Error> {
         self.0.call(|counter: &Counter| counter.value()).await
     }
 }
@@ -90,7 +90,7 @@ fn test_handle_call_mut() {
 //         *(value.borrow_mut()) = v;
 //         Ok(())
 //     };
-//     loopa::spawn::<loopa::Error, _>(pool.spawner(), future);
+//     async_object::spawn::<async_object::Error, _>(pool.spawner(), future);
 //     pool.run_until_stalled();
 //     assert!(*value_r.borrow() == 1)
 // }

@@ -1,7 +1,7 @@
 use std::sync::{mpsc::channel, Arc, RwLock};
 
 use futures::{executor::ThreadPool, join, task::SpawnExt, Stream, StreamExt};
-use loopa::{EventStream, Handle, Keeper};
+use async_object::{EventStream, Handle, Keeper};
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
 enum FizzBuzz {
@@ -60,7 +60,7 @@ impl From<Handle<Sink>> for HSink {
 }
 
 impl HSink {
-    async fn set_value(&self, pos: usize, value: FizzBuzz) -> Result<(), loopa::Error> {
+    async fn set_value(&self, pos: usize, value: FizzBuzz) -> Result<(), async_object::Error> {
         self.0.call_mut(|sink| sink.set_value(pos, value)).await
     }
 }
