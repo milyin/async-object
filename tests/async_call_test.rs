@@ -1,31 +1,13 @@
-use futures::{
-    executor::{LocalPool, LocalSpawner},
-    task::LocalSpawnExt,
-};
-use loopa::{self, EventSubscribers, Handle, HandleSupport};
-use std::{
-    any::Any,
-    cell::RefCell,
-    rc::Rc,
-    sync::{Arc, RwLock, Weak},
-    task::Waker,
-};
+use futures::{executor::LocalPool, task::LocalSpawnExt};
+use loopa::{self, Handle, Keeper};
+use std::{cell::RefCell, rc::Rc};
 
-#[derive(Clone)]
-enum CounterEvent {
-    Incremented,
-}
 struct Counter {
     value: usize,
 }
 
-trait Counter {
-    async fn inc(&self) -> Result<(), loopa::Error>;
-    async fn value(&self) -> Result<usize, loopa::Error>;
-}
-
 impl Counter {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self { value: 0 }
     }
     fn inc(&mut self) {
@@ -36,7 +18,9 @@ impl Counter {
     }
 }
 
-impl Counter for Handle<Counter> {
+struct HCounter(Handle<Counter>);
+
+impl HCounter {
     async fn inc(&self) -> Result<(), loopa::Error> {
         self.0.call_mut(|counter: &mut Counter| counter.inc()).await
     }
@@ -45,20 +29,53 @@ impl Counter for Handle<Counter> {
     }
 }
 
+struct KCounter(Keeper<Counter>);
+
+impl KCounter {
+    fn new() -> Self {
+        KCounter(Keeper::new(Counter::new()))
+    }
+    fn handle(&self) -> HCounter {
+        HCounter(self.0.handle())
+    }
+}
+
 #[test]
 fn test_handle_call() {
-    let value = Rc::new(RefCell::new(None));
-    let value_r = value.clone();
-    let counter = Counter::new();
-    let hcounter = counter.read().unwrap().handle();
+    let test_value = Rc::new(RefCell::new(None));
+    let test_value_r = test_value.clone();
+
+    let kvalue = KCounter::new();
+    let hvalue = kvalue.handle();
+
     let future = async move {
-        let v = hcounter.value().await.unwrap();
-        *(value.borrow_mut()) = Some(v);
+        let v = hvalue.value().await.unwrap();
+        *(test_value.borrow_mut()) = Some(v);
     };
     let mut pool = LocalPool::new();
     pool.spawner().spawn_local(future).unwrap();
     pool.run_until_stalled();
-    assert!(value_r.borrow().is_some())
+    assert!(test_value_r.borrow().is_some())
+}
+
+#[test]
+fn test_handle_call_mut() {
+    let test_value = Rc::new(RefCell::new(None));
+    let test_value_r = test_value.clone();
+
+    let kvalue = KCounter::new();
+    let hvalue = kvalue.handle();
+
+    let future = async move {
+        hvalue.inc().await.unwrap();
+        let v = hvalue.value().await.unwrap();
+        *(test_value.borrow_mut()) = Some(v);
+    };
+    let mut pool = LocalPool::new();
+    pool.spawner().spawn_local(future).unwrap();
+    pool.run_until_stalled();
+    assert!(test_value_r.borrow().is_some());
+    assert!(test_value_r.borrow().unwrap() == 1);
 }
 
 // #[test]
