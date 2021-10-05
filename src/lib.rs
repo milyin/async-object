@@ -141,10 +141,10 @@ impl<EVT: Send + Sync + Clone + 'static> EventStream<EVT> {
                 Poll::Ready(None)
             }
         } else {
-            event_queue.waker = Some(cx.waker().clone());
             if let Some(evt) = event_queue.get_event() {
                 Poll::Ready(Some(evt))
             } else {
+                event_queue.waker = Some(cx.waker().clone());
                 Poll::Pending
             }
         }
@@ -207,15 +207,13 @@ where
     }
     fn poll(&mut self, cx: &Context) -> Poll<Result<R, Error>> {
         if let Some(object) = self.handle.object.upgrade() {
-            match self.func.take().unwrap() {
+            self.handle.add_call_waker(cx.waker().clone());
+            let res = match self.func.take().unwrap() {
                 Either::F(func) => {
                     if let Ok(object) = object.try_read() {
                         let r = func(&*object);
-                        drop(object);
-                        self.handle.wake_calls();
                         Poll::Ready(Ok(r))
                     } else {
-                        self.handle.add_call_waker(cx.waker().clone());
                         self.func = Some(Either::F(func));
                         Poll::Pending
                     }
@@ -223,16 +221,17 @@ where
                 Either::Fmut(func_mut) => {
                     if let Ok(mut object) = object.try_write() {
                         let r = func_mut(&mut *object);
-                        drop(object);
-                        self.handle.wake_calls();
                         Poll::Ready(Ok(r))
                     } else {
-                        self.handle.add_call_waker(cx.waker().clone());
                         self.func = Some(Either::Fmut(func_mut));
                         Poll::Pending
                     }
                 }
+            };
+            if res.is_ready() {
+                self.handle.wake_calls();
             }
+            res
         } else {
             Poll::Ready(Err(Error::ObjectNotExists))
         }

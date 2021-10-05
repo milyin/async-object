@@ -34,7 +34,6 @@ impl Sink {
     }
     pub fn validate(&self) -> bool {
         for (n, res) in self.values.iter().enumerate() {
-            dbg!(n, res);
             if let Some(res) = res {
                 let expected = match (n % 5 == 0, n % 3 == 0) {
                     (true, true) => FizzBuzz::FizzBuzz,
