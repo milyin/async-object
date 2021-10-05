@@ -1,7 +1,7 @@
 use std::sync::{mpsc::channel, Arc, RwLock};
 
+use async_object::{Handle, Keeper};
 use futures::{executor::ThreadPool, join, task::SpawnExt, Stream, StreamExt};
-use async_object::{EventStream, Handle, Keeper};
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
 enum FizzBuzz {
@@ -88,7 +88,7 @@ struct Generator;
 struct HGenerator(Handle<Generator>);
 impl HGenerator {
     fn values(&self) -> impl Stream<Item = usize> {
-        EventStream::new(self.0.clone())
+        self.0.receive_events()
     }
     fn send_value(&self, value: usize) {
         self.0.send_event(value)

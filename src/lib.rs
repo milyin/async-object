@@ -121,7 +121,7 @@ impl<EVT: Send + Sync> EventQueue<EVT> {
     }
 }
 
-pub struct EventStream<EVT: Send + Sync + Clone + 'static> {
+struct EventStream<EVT: Send + Sync + Clone + 'static> {
     event_queue: Arc<RwLock<EventQueue<EVT>>>,
 }
 
@@ -302,6 +302,9 @@ impl<T: 'static> Handle<T> {
         if let Some(subscribers) = self.subscribers.upgrade() {
             subscribers.write().unwrap().subscribe(event_queue)
         }
+    }
+    pub fn receive_events<EVT: Send + Sync + Clone + 'static>(&self) -> impl Stream<Item = EVT> {
+        EventStream::new(self.clone())
     }
     pub fn send_event<EVT: Send + Sync + Clone + 'static>(&self, event: EVT) {
         if let Some(subscribers) = self.subscribers.upgrade() {
