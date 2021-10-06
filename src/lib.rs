@@ -2,19 +2,11 @@ use futures::{Future, Stream};
 use std::{
     any::{Any, TypeId},
     collections::{HashMap, VecDeque},
-    fmt::Debug,
     marker::PhantomData,
     pin::Pin,
     sync::{Arc, RwLock, Weak},
     task::{Context, Poll, Waker},
 };
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("Object not exists")]
-    ObjectNotExists,
-}
 
 struct Subscribers {
     subscribers: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
@@ -205,14 +197,14 @@ where
             _phantom: PhantomData,
         }
     }
-    fn poll(&mut self, cx: &Context) -> Poll<Result<R, Error>> {
+    fn poll(&mut self, cx: &Context) -> Poll<Option<R>> {
         if let Some(object) = self.handle.object.upgrade() {
             self.handle.add_call_waker(cx.waker().clone());
             let res = match self.func.take().unwrap() {
                 Either::F(func) => {
                     if let Ok(object) = object.try_read() {
                         let r = func(&*object);
-                        Poll::Ready(Ok(r))
+                        Poll::Ready(Some(r))
                     } else {
                         self.func = Some(Either::F(func));
                         Poll::Pending
@@ -221,7 +213,7 @@ where
                 Either::Fmut(func_mut) => {
                     if let Ok(mut object) = object.try_write() {
                         let r = func_mut(&mut *object);
-                        Poll::Ready(Ok(r))
+                        Poll::Ready(Some(r))
                     } else {
                         self.func = Some(Either::Fmut(func_mut));
                         Poll::Pending
@@ -233,7 +225,7 @@ where
             }
             res
         } else {
-            Poll::Ready(Err(Error::ObjectNotExists))
+            Poll::Ready(None)
         }
     }
 }
@@ -241,7 +233,7 @@ where
 impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
     for HandleCall<T, R, F, FMut>
 {
-    type Output = Result<R, Error>;
+    type Output = Option<R>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().poll(cx)
     }
@@ -286,13 +278,13 @@ impl<T: 'static> Handle<T> {
         wakers.drain(..).for_each(|w| w.wake());
     }
 
-    pub fn call<R, F: FnOnce(&T) -> R>(&self, f: F) -> impl Future<Output = Result<R, Error>> {
+    pub fn call<R, F: FnOnce(&T) -> R>(&self, f: F) -> impl Future<Output = Option<R>> {
         new_handle_call(self.clone(), f)
     }
     pub fn call_mut<R, F: FnOnce(&mut T) -> R>(
         &self,
         f: F,
-    ) -> impl Future<Output = Result<R, Error>> {
+    ) -> impl Future<Output = Option<R>> {
         new_handle_call_mut(self.clone(), f)
     }
     fn subscribe<EVT: Send + Sync + Clone + 'static>(

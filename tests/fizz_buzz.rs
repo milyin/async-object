@@ -60,7 +60,7 @@ impl From<Handle<Sink>> for HSink {
 }
 
 impl HSink {
-    async fn set_value(&self, pos: usize, value: FizzBuzz) -> Result<(), async_object::Error> {
+    async fn set_value(&self, pos: usize, value: FizzBuzz) -> Option<()> {
         self.0.call_mut(|sink| sink.set_value(pos, value)).await
     }
 }

@@ -21,10 +21,10 @@ impl Counter {
 struct HCounter(Handle<Counter>);
 
 impl HCounter {
-    async fn inc(&self) -> Result<(), async_object::Error> {
+    async fn inc(&self) -> Option<()> {
         self.0.call_mut(|counter: &mut Counter| counter.inc()).await
     }
-    async fn value(&self) -> Result<usize, async_object::Error> {
+    async fn value(&self) -> Option<usize> {
         self.0.call(|counter: &Counter| counter.value()).await
     }
 }
@@ -77,22 +77,3 @@ fn test_handle_call_mut() {
     assert!(test_value_r.borrow().is_some());
     assert!(test_value_r.borrow().unwrap() == 1);
 }
-
-// #[test]
-// fn test_handle_call_mut() {
-//     let value = Rc::new(RefCell::new(0));
-//     let value_r = value.clone();
-//     let mut pool = Pool::new();
-//     let hcounter = HCounter::new(&mut pool);
-//     let future = async move {
-//         hcounter.inc().await?;
-//         let v = hcounter.value().await?;
-//         *(value.borrow_mut()) = v;
-//         Ok(())
-//     };
-//     async_object::spawn::<async_object::Error, _>(pool.spawner(), future);
-//     pool.run_until_stalled();
-//     assert!(*value_r.borrow() == 1)
-// }
-
-// fn test_send_receive_event() {}
