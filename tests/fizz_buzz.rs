@@ -53,12 +53,6 @@ impl Sink {
 #[derive(Clone)]
 struct HSink(Handle<Sink>);
 
-impl From<Handle<Sink>> for HSink {
-    fn from(h: Handle<Sink>) -> Self {
-        HSink(h)
-    }
-}
-
 impl HSink {
     async fn set_value(&self, pos: usize, value: FizzBuzz) -> Option<()> {
         self.0.call_mut(|sink| sink.set_value(pos, value)).await
