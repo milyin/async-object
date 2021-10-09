@@ -118,10 +118,10 @@ struct EventStream<EVT: Send + Sync + Clone + 'static> {
 }
 
 impl<EVT: Send + Sync + Clone + 'static> EventStream<EVT> {
-    pub fn new<T>(reference: Refefence<T>) -> Self {
+    pub fn new<T>(tag: Tag<T>) -> Self {
         let event_queue = Arc::new(RwLock::new(EventQueue::new()));
         let weak_event_queue = Arc::downgrade(&mut (event_queue.clone()));
-        reference.subscribe(weak_event_queue);
+        tag.subscribe(weak_event_queue);
         Self { event_queue }
     }
     fn poll_next(self: &mut Self, cx: &mut Context<'_>) -> Poll<Option<EVT>> {
@@ -155,51 +155,51 @@ enum Either<F, FMut> {
     Fmut(FMut),
 }
 
-struct ReferenceCall<T: 'static, R, F, FMut>
+struct TagCall<T: 'static, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
 {
-    reference: Refefence<T>,
+    tag: Tag<T>,
     func: Option<Either<Box<F>, Box<FMut>>>,
     _phantom: PhantomData<Box<(T, R)>>,
 }
 
 fn new_call<T, R, F: FnOnce(&T) -> R>(
-    reference: Refefence<T>,
+    tag: Tag<T>,
     f: F,
-) -> ReferenceCall<T, R, F, fn(&mut T) -> R> {
-    ReferenceCall::new(reference, f)
+) -> TagCall<T, R, F, fn(&mut T) -> R> {
+    TagCall::new(tag, f)
 }
 fn new_call_mut<T, R, FMut: FnOnce(&mut T) -> R>(
-    reference: Refefence<T>,
+    tag: Tag<T>,
     f: FMut,
-) -> ReferenceCall<T, R, fn(&T) -> R, FMut> {
-    ReferenceCall::new_mut(reference, f)
+) -> TagCall<T, R, fn(&T) -> R, FMut> {
+    TagCall::new_mut(tag, f)
 }
 
-impl<T: 'static, R, F, FMut> ReferenceCall<T, R, F, FMut>
+impl<T: 'static, R, F, FMut> TagCall<T, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
 {
-    fn new(reference: Refefence<T>, func: F) -> Self {
+    fn new(tag: Tag<T>, func: F) -> Self {
         Self {
-            reference,
+            tag,
             func: Some(Either::F(Box::new(func))),
             _phantom: PhantomData,
         }
     }
-    fn new_mut(reference: Refefence<T>, func: FMut) -> Self {
+    fn new_mut(tag: Tag<T>, func: FMut) -> Self {
         Self {
-            reference,
+            tag,
             func: Some(Either::Fmut(Box::new(func))),
             _phantom: PhantomData,
         }
     }
     fn poll(&mut self, cx: &Context) -> Poll<Option<R>> {
-        if let Some(object) = self.reference.object.upgrade() {
-            self.reference.add_call_waker(cx.waker().clone());
+        if let Some(object) = self.tag.object.upgrade() {
+            self.tag.add_call_waker(cx.waker().clone());
             let res = match self.func.take().unwrap() {
                 Either::F(func) => {
                     if let Ok(object) = object.try_read() {
@@ -221,7 +221,7 @@ where
                 }
             };
             if res.is_ready() {
-                self.reference.wake_calls();
+                self.tag.wake_calls();
             }
             res
         } else {
@@ -231,7 +231,7 @@ where
 }
 
 impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
-    for ReferenceCall<T, R, F, FMut>
+    for TagCall<T, R, F, FMut>
 {
     type Output = Option<R>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -239,13 +239,13 @@ impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
     }
 }
 
-pub struct Refefence<T: 'static> {
+pub struct Tag<T: 'static> {
     object: Weak<RwLock<T>>,
     subscribers: Weak<RwLock<Subscribers>>,
     call_wakers: Weak<RwLock<Vec<Waker>>>,
 }
 
-impl<T: 'static> Clone for Refefence<T> {
+impl<T: 'static> Clone for Tag<T> {
     fn clone(&self) -> Self {
         Self {
             object: self.object.clone(),
@@ -255,7 +255,7 @@ impl<T: 'static> Clone for Refefence<T> {
     }
 }
 
-impl<T: 'static> Refefence<T> {
+impl<T: 'static> Tag<T> {
     fn new(
         object: Weak<RwLock<T>>,
         subscribers: Weak<RwLock<Subscribers>>,
@@ -329,11 +329,11 @@ impl<T> Keeper<T> {
             object: Arc::new(RwLock::new(object)),
         }
     }
-    pub fn reference(&self) -> Refefence<T> {
+    pub fn tag(&self) -> Tag<T> {
         let object = Arc::downgrade(&self.object);
         let subscribers = Arc::downgrade(&self.subscribers);
         let call_wakers = Arc::downgrade(&self.call_wakers);
-        Refefence::new(object, subscribers, call_wakers)
+        Tag::new(object, subscribers, call_wakers)
     }
 }
 

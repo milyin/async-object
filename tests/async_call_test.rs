@@ -1,4 +1,4 @@
-use async_object::{self, Refefence, Keeper};
+use async_object::{self, Tag, Keeper};
 use futures::{executor::LocalPool, task::LocalSpawnExt};
 use std::{cell::RefCell, rc::Rc};
 
@@ -18,7 +18,7 @@ impl Counter {
     }
 }
 
-struct HCounter(Refefence<Counter>);
+struct HCounter(Tag<Counter>);
 
 impl HCounter {
     async fn inc(&self) -> Option<()> {
@@ -36,7 +36,7 @@ impl KCounter {
         KCounter(Keeper::new(Counter::new()))
     }
     fn handle(&self) -> HCounter {
-        HCounter(self.0.reference())
+        HCounter(self.0.tag())
     }
 }
 
