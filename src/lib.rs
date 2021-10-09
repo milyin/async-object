@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, VecDeque},
     marker::PhantomData,
     pin::Pin,
-    sync::{Arc, RwLock, Weak},
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak},
     task::{Context, Poll, Waker},
 };
 
@@ -336,6 +336,12 @@ impl<T> Keeper<T> {
         let subscribers = Arc::downgrade(&self.subscribers);
         let call_wakers = Arc::downgrade(&self.call_wakers);
         Tag::new(object, subscribers, call_wakers)
+    }
+    pub fn get(&self) -> RwLockReadGuard<'_, T> {
+        self.object.read().unwrap()
+    }
+    pub fn get_mut(&self) -> RwLockWriteGuard<'_, T> {
+        self.object.write().unwrap()
     }
 }
 

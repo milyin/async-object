@@ -1,4 +1,4 @@
-use std::sync::{mpsc::channel, Arc, RwLock};
+use std::sync::{mpsc::channel, Arc, RwLock, RwLockReadGuard};
 
 use async_object::{Keeper, Tag};
 use futures::{executor::ThreadPool, join, task::SpawnExt, Stream, StreamExt};
@@ -66,8 +66,11 @@ impl KSink {
     pub fn new() -> Self {
         Self(Keeper::new(Sink::new()))
     }
-    pub fn handle(&self) -> HSink {
+    pub fn tag(&self) -> HSink {
         HSink(self.0.tag())
+    }
+    pub fn get(&self) -> RwLockReadGuard<'_, Sink> {
+        self.0.get()
     }
 }
 
@@ -106,7 +109,7 @@ fn fizz_buzz_threadpool() {
         .create()
         .unwrap();
     let ksink = KSink::new();
-    let hsink = ksink.handle();
+    let hsink = ksink.tag();
     {
         let kgenerator = KGenerator::new();
         let hgenerator = kgenerator.handle();
@@ -172,5 +175,5 @@ fn fizz_buzz_threadpool() {
         });
         let _ = rx.recv().unwrap();
     }
-    assert!(ksink.as_ref().read().unwrap().validate());
+    assert!(ksink.get().validate());
 }
