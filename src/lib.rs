@@ -8,6 +8,18 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Object was destroyed")]
+    Destroyed,
+    #[error("Object is busy")]
+    Busy,
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
 struct Subscribers {
     subscribers: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
@@ -155,7 +167,7 @@ enum Either<F, FMut> {
     Fmut(FMut),
 }
 
-struct TagCall<T: 'static, R, F, FMut>
+struct AsyncCall<T: 'static, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
@@ -165,17 +177,20 @@ where
     _phantom: PhantomData<Box<(T, R)>>,
 }
 
-fn new_call<T, R, F: FnOnce(&T) -> R>(tag: Tag<T>, f: F) -> TagCall<T, R, F, fn(&mut T) -> R> {
-    TagCall::new(tag, f)
+fn new_async_call<T, R, F: FnOnce(&T) -> R>(
+    tag: Tag<T>,
+    f: F,
+) -> AsyncCall<T, R, F, fn(&mut T) -> R> {
+    AsyncCall::new(tag, f)
 }
-fn new_call_mut<T, R, FMut: FnOnce(&mut T) -> R>(
+fn new_async_call_mut<T, R, FMut: FnOnce(&mut T) -> R>(
     tag: Tag<T>,
     f: FMut,
-) -> TagCall<T, R, fn(&T) -> R, FMut> {
-    TagCall::new_mut(tag, f)
+) -> AsyncCall<T, R, fn(&T) -> R, FMut> {
+    AsyncCall::new_mut(tag, f)
 }
 
-impl<T: 'static, R, F, FMut> TagCall<T, R, F, FMut>
+impl<T: 'static, R, F, FMut> AsyncCall<T, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
@@ -194,14 +209,14 @@ where
             _phantom: PhantomData,
         }
     }
-    fn poll(&mut self, cx: &Context) -> Poll<Option<R>> {
+    fn poll(&mut self, cx: &Context) -> Poll<crate::Result<R>> {
         if let Some(object) = self.tag.object.upgrade() {
             self.tag.add_call_waker(cx.waker().clone());
             let res = match self.func.take().unwrap() {
                 Either::F(func) => {
                     if let Ok(object) = object.try_read() {
                         let r = func(&*object);
-                        Poll::Ready(Some(r))
+                        Poll::Ready(Ok(r))
                     } else {
                         self.func = Some(Either::F(func));
                         Poll::Pending
@@ -210,7 +225,7 @@ where
                 Either::Fmut(func_mut) => {
                     if let Ok(mut object) = object.try_write() {
                         let r = func_mut(&mut *object);
-                        Poll::Ready(Some(r))
+                        Poll::Ready(Ok(r))
                     } else {
                         self.func = Some(Either::Fmut(func_mut));
                         Poll::Pending
@@ -222,13 +237,13 @@ where
             }
             res
         } else {
-            Poll::Ready(None)
+            Poll::Ready(Err(Error::Destroyed))
         }
     }
 }
 
-impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future for TagCall<T, R, F, FMut> {
-    type Output = Option<R>;
+impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future for AsyncCall<T, R, F, FMut> {
+    type Output = crate::Result<R>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().poll(cx)
     }
@@ -273,11 +288,17 @@ impl<T: 'static> Tag<T> {
         wakers.drain(..).for_each(|w| w.wake());
     }
 
-    pub fn call<R, F: FnOnce(&T) -> R>(&self, f: F) -> impl Future<Output = Option<R>> {
-        new_call(self.clone(), f)
+    pub fn async_call<R, F: FnOnce(&T) -> R>(
+        &self,
+        f: F,
+    ) -> impl Future<Output = crate::Result<R>> {
+        new_async_call(self.clone(), f)
     }
-    pub fn call_mut<R, F: FnOnce(&mut T) -> R>(&self, f: F) -> impl Future<Output = Option<R>> {
-        new_call_mut(self.clone(), f)
+    pub fn async_call_mut<R, F: FnOnce(&mut T) -> R>(
+        &self,
+        f: F,
+    ) -> impl Future<Output = crate::Result<R>> {
+        new_async_call_mut(self.clone(), f)
     }
     fn subscribe<EVT: Send + Sync + Clone + 'static>(
         &self,

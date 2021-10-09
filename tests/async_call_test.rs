@@ -1,4 +1,4 @@
-use async_object::{self, Tag, Keeper};
+use async_object::{self, Keeper, Tag};
 use futures::{executor::LocalPool, task::LocalSpawnExt};
 use std::{cell::RefCell, rc::Rc};
 
@@ -21,11 +21,13 @@ impl Counter {
 struct HCounter(Tag<Counter>);
 
 impl HCounter {
-    async fn inc(&self) -> Option<()> {
-        self.0.call_mut(|counter: &mut Counter| counter.inc()).await
+    async fn inc(&self) -> async_object::Result<()> {
+        self.0
+            .async_call_mut(|counter: &mut Counter| counter.inc())
+            .await
     }
-    async fn value(&self) -> Option<usize> {
-        self.0.call(|counter: &Counter| counter.value()).await
+    async fn value(&self) -> async_object::Result<usize> {
+        self.0.async_call(|counter: &Counter| counter.value()).await
     }
 }
 
