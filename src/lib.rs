@@ -165,10 +165,7 @@ where
     _phantom: PhantomData<Box<(T, R)>>,
 }
 
-fn new_call<T, R, F: FnOnce(&T) -> R>(
-    tag: Tag<T>,
-    f: F,
-) -> TagCall<T, R, F, fn(&mut T) -> R> {
+fn new_call<T, R, F: FnOnce(&T) -> R>(tag: Tag<T>, f: F) -> TagCall<T, R, F, fn(&mut T) -> R> {
     TagCall::new(tag, f)
 }
 fn new_call_mut<T, R, FMut: FnOnce(&mut T) -> R>(
@@ -230,9 +227,7 @@ where
     }
 }
 
-impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
-    for TagCall<T, R, F, FMut>
-{
+impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future for TagCall<T, R, F, FMut> {
     type Output = Option<R>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().poll(cx)
@@ -281,10 +276,7 @@ impl<T: 'static> Tag<T> {
     pub fn call<R, F: FnOnce(&T) -> R>(&self, f: F) -> impl Future<Output = Option<R>> {
         new_call(self.clone(), f)
     }
-    pub fn call_mut<R, F: FnOnce(&mut T) -> R>(
-        &self,
-        f: F,
-    ) -> impl Future<Output = Option<R>> {
+    pub fn call_mut<R, F: FnOnce(&mut T) -> R>(&self, f: F) -> impl Future<Output = Option<R>> {
         new_call_mut(self.clone(), f)
     }
     fn subscribe<EVT: Send + Sync + Clone + 'static>(
@@ -305,6 +297,7 @@ impl<T: 'static> Tag<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct Keeper<T> {
     subscribers: Arc<RwLock<Subscribers>>,
     call_wakers: Arc<RwLock<Vec<Waker>>>,
