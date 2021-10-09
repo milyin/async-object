@@ -118,10 +118,10 @@ struct EventStream<EVT: Send + Sync + Clone + 'static> {
 }
 
 impl<EVT: Send + Sync + Clone + 'static> EventStream<EVT> {
-    pub fn new<T>(handle: Handle<T>) -> Self {
+    pub fn new<T>(reference: Refefence<T>) -> Self {
         let event_queue = Arc::new(RwLock::new(EventQueue::new()));
         let weak_event_queue = Arc::downgrade(&mut (event_queue.clone()));
-        handle.subscribe(weak_event_queue);
+        reference.subscribe(weak_event_queue);
         Self { event_queue }
     }
     fn poll_next(self: &mut Self, cx: &mut Context<'_>) -> Poll<Option<EVT>> {
@@ -155,51 +155,51 @@ enum Either<F, FMut> {
     Fmut(FMut),
 }
 
-struct HandleCall<T: 'static, R, F, FMut>
+struct ReferenceCall<T: 'static, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
 {
-    handle: Handle<T>,
+    reference: Refefence<T>,
     func: Option<Either<Box<F>, Box<FMut>>>,
     _phantom: PhantomData<Box<(T, R)>>,
 }
 
-fn new_handle_call<T, R, F: FnOnce(&T) -> R>(
-    handle: Handle<T>,
+fn new_call<T, R, F: FnOnce(&T) -> R>(
+    reference: Refefence<T>,
     f: F,
-) -> HandleCall<T, R, F, fn(&mut T) -> R> {
-    HandleCall::new(handle, f)
+) -> ReferenceCall<T, R, F, fn(&mut T) -> R> {
+    ReferenceCall::new(reference, f)
 }
-fn new_handle_call_mut<T, R, FMut: FnOnce(&mut T) -> R>(
-    handle: Handle<T>,
+fn new_call_mut<T, R, FMut: FnOnce(&mut T) -> R>(
+    reference: Refefence<T>,
     f: FMut,
-) -> HandleCall<T, R, fn(&T) -> R, FMut> {
-    HandleCall::new_mut(handle, f)
+) -> ReferenceCall<T, R, fn(&T) -> R, FMut> {
+    ReferenceCall::new_mut(reference, f)
 }
 
-impl<T: 'static, R, F, FMut> HandleCall<T, R, F, FMut>
+impl<T: 'static, R, F, FMut> ReferenceCall<T, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
 {
-    fn new(handle: Handle<T>, func: F) -> Self {
+    fn new(reference: Refefence<T>, func: F) -> Self {
         Self {
-            handle,
+            reference,
             func: Some(Either::F(Box::new(func))),
             _phantom: PhantomData,
         }
     }
-    fn new_mut(handle: Handle<T>, func: FMut) -> Self {
+    fn new_mut(reference: Refefence<T>, func: FMut) -> Self {
         Self {
-            handle,
+            reference,
             func: Some(Either::Fmut(Box::new(func))),
             _phantom: PhantomData,
         }
     }
     fn poll(&mut self, cx: &Context) -> Poll<Option<R>> {
-        if let Some(object) = self.handle.object.upgrade() {
-            self.handle.add_call_waker(cx.waker().clone());
+        if let Some(object) = self.reference.object.upgrade() {
+            self.reference.add_call_waker(cx.waker().clone());
             let res = match self.func.take().unwrap() {
                 Either::F(func) => {
                     if let Ok(object) = object.try_read() {
@@ -221,7 +221,7 @@ where
                 }
             };
             if res.is_ready() {
-                self.handle.wake_calls();
+                self.reference.wake_calls();
             }
             res
         } else {
@@ -231,7 +231,7 @@ where
 }
 
 impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
-    for HandleCall<T, R, F, FMut>
+    for ReferenceCall<T, R, F, FMut>
 {
     type Output = Option<R>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -239,13 +239,13 @@ impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
     }
 }
 
-pub struct Handle<T: 'static> {
+pub struct Refefence<T: 'static> {
     object: Weak<RwLock<T>>,
     subscribers: Weak<RwLock<Subscribers>>,
     call_wakers: Weak<RwLock<Vec<Waker>>>,
 }
 
-impl<T: 'static> Clone for Handle<T> {
+impl<T: 'static> Clone for Refefence<T> {
     fn clone(&self) -> Self {
         Self {
             object: self.object.clone(),
@@ -255,7 +255,7 @@ impl<T: 'static> Clone for Handle<T> {
     }
 }
 
-impl<T: 'static> Handle<T> {
+impl<T: 'static> Refefence<T> {
     fn new(
         object: Weak<RwLock<T>>,
         subscribers: Weak<RwLock<Subscribers>>,
@@ -279,13 +279,13 @@ impl<T: 'static> Handle<T> {
     }
 
     pub fn call<R, F: FnOnce(&T) -> R>(&self, f: F) -> impl Future<Output = Option<R>> {
-        new_handle_call(self.clone(), f)
+        new_call(self.clone(), f)
     }
     pub fn call_mut<R, F: FnOnce(&mut T) -> R>(
         &self,
         f: F,
     ) -> impl Future<Output = Option<R>> {
-        new_handle_call_mut(self.clone(), f)
+        new_call_mut(self.clone(), f)
     }
     fn subscribe<EVT: Send + Sync + Clone + 'static>(
         &self,
@@ -329,11 +329,11 @@ impl<T> Keeper<T> {
             object: Arc::new(RwLock::new(object)),
         }
     }
-    pub fn handle(&self) -> Handle<T> {
+    pub fn reference(&self) -> Refefence<T> {
         let object = Arc::downgrade(&self.object);
         let subscribers = Arc::downgrade(&self.subscribers);
         let call_wakers = Arc::downgrade(&self.call_wakers);
-        Handle::new(object, subscribers, call_wakers)
+        Refefence::new(object, subscribers, call_wakers)
     }
 }
 

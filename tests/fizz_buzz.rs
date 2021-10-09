@@ -1,6 +1,6 @@
 use std::sync::{mpsc::channel, Arc, RwLock};
 
-use async_object::{Handle, Keeper};
+use async_object::{Refefence, Keeper};
 use futures::{executor::ThreadPool, join, task::SpawnExt, Stream, StreamExt};
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
@@ -51,7 +51,7 @@ impl Sink {
 }
 
 #[derive(Clone)]
-struct HSink(Handle<Sink>);
+struct HSink(Refefence<Sink>);
 
 impl HSink {
     async fn set_value(&self, pos: usize, value: FizzBuzz) -> Option<()> {
@@ -66,7 +66,7 @@ impl KSink {
         Self(Keeper::new(Sink::new()))
     }
     pub fn handle(&self) -> HSink {
-        HSink(self.0.handle())
+        HSink(self.0.reference())
     }
 }
 
@@ -79,7 +79,7 @@ impl AsRef<Arc<RwLock<Sink>>> for KSink {
 struct Generator;
 
 #[derive(Clone)]
-struct HGenerator(Handle<Generator>);
+struct HGenerator(Refefence<Generator>);
 impl HGenerator {
     fn values(&self) -> impl Stream<Item = usize> {
         self.0.receive_events()
@@ -95,7 +95,7 @@ impl KGenerator {
         Self(Keeper::new(Generator {}))
     }
     pub fn handle(&self) -> HGenerator {
-        HGenerator(self.0.handle())
+        HGenerator(self.0.reference())
     }
 }
 
