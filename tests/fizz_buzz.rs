@@ -1,7 +1,12 @@
 use std::sync::{mpsc::channel, Arc, RwLock, RwLockReadGuard};
 
 use async_object::{Keeper, Tag};
-use futures::{executor::ThreadPool, join, task::SpawnExt, Stream, StreamExt};
+use futures::{
+    executor::{LocalPool, ThreadPool},
+    join,
+    task::SpawnExt,
+    Stream, StreamExt,
+};
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
 enum FizzBuzz {
@@ -54,10 +59,13 @@ impl Sink {
 struct HSink(Tag<Sink>);
 
 impl HSink {
-    async fn set_value(&self, pos: usize, value: FizzBuzz) -> async_object::Result<()> {
+    async fn async_set_value(&self, pos: usize, value: FizzBuzz) -> async_object::Result<()> {
         self.0
             .async_call_mut(|sink| sink.set_value(pos, value))
             .await
+    }
+    fn set_value(&self, pos: usize, value: FizzBuzz) -> async_object::Result<()> {
+        self.0.call_mut(|sink| sink.set_value(pos, value))
     }
 }
 
@@ -106,7 +114,7 @@ impl KGenerator {
 }
 
 #[test]
-fn fizz_buzz_threadpool() {
+fn fizz_buzz_threadpool_async_call() {
     let pool = ThreadPool::builder() /*.pool_size(8)*/
         .create()
         .unwrap();
@@ -120,7 +128,7 @@ fn fizz_buzz_threadpool() {
             let hsink = hsink.clone();
             pool.spawn_with_handle(async move {
                 while let Some(n) = values.next().await {
-                    hsink.set_value(n, FizzBuzz::Number).await.unwrap();
+                    hsink.async_set_value(n, FizzBuzz::Number).await.unwrap();
                 }
             })
             .unwrap()
@@ -131,7 +139,7 @@ fn fizz_buzz_threadpool() {
             pool.spawn_with_handle(async move {
                 while let Some(n) = values.next().await {
                     if n % 3 == 0 {
-                        hsink.set_value(n, FizzBuzz::Fizz).await.unwrap();
+                        hsink.async_set_value(n, FizzBuzz::Fizz).await.unwrap();
                     }
                 }
             })
@@ -143,7 +151,7 @@ fn fizz_buzz_threadpool() {
             pool.spawn_with_handle(async move {
                 while let Some(n) = values.next().await {
                     if n % 5 == 0 {
-                        hsink.set_value(n, FizzBuzz::Buzz).await.unwrap();
+                        hsink.async_set_value(n, FizzBuzz::Buzz).await.unwrap();
                     }
                 }
             })
@@ -155,7 +163,7 @@ fn fizz_buzz_threadpool() {
             pool.spawn_with_handle(async move {
                 while let Some(n) = values.next().await {
                     if n % 5 == 0 && n % 3 == 0 {
-                        hsink.set_value(n, FizzBuzz::FizzBuzz).await.unwrap();
+                        hsink.async_set_value(n, FizzBuzz::FizzBuzz).await.unwrap();
                     }
                 }
             })
@@ -164,7 +172,7 @@ fn fizz_buzz_threadpool() {
 
         pool.spawn_ok(async move {
             for n in 1..100 {
-                hsink.set_value(n, FizzBuzz::Expected).await.unwrap();
+                hsink.async_set_value(n, FizzBuzz::Expected).await.unwrap();
                 hgenerator.send_value(n);
             }
             drop(kgenerator);
@@ -176,6 +184,81 @@ fn fizz_buzz_threadpool() {
             tx.send(()).unwrap();
         });
         let _ = rx.recv().unwrap();
+    }
+    assert!(ksink.get().validate());
+}
+
+#[test]
+fn fizz_buzz_localpool_sync_call() {
+    let mut pool = LocalPool::new();
+    let spawner = pool.spawner();
+    let ksink = KSink::new();
+    let hsink = ksink.tag();
+    {
+        let kgenerator = KGenerator::new();
+        let hgenerator = kgenerator.handle();
+        {
+            let mut values = hgenerator.values();
+            let hsink = hsink.clone();
+            spawner
+                .spawn(async move {
+                    while let Some(n) = values.next().await {
+                        hsink.set_value(n, FizzBuzz::Number).unwrap();
+                    }
+                })
+                .unwrap()
+        };
+        {
+            let hsink = hsink.clone();
+            let mut values = hgenerator.values();
+            spawner
+                .spawn(async move {
+                    while let Some(n) = values.next().await {
+                        if n % 3 == 0 {
+                            hsink.set_value(n, FizzBuzz::Fizz).unwrap();
+                        }
+                    }
+                })
+                .unwrap()
+        };
+        {
+            let hsink = hsink.clone();
+            let mut values = hgenerator.values();
+            spawner
+                .spawn(async move {
+                    while let Some(n) = values.next().await {
+                        if n % 5 == 0 {
+                            hsink.set_value(n, FizzBuzz::Buzz).unwrap();
+                        }
+                    }
+                })
+                .unwrap()
+        };
+        {
+            let hsink = hsink.clone();
+            let mut values = hgenerator.values();
+            spawner
+                .spawn(async move {
+                    while let Some(n) = values.next().await {
+                        if n % 5 == 0 && n % 3 == 0 {
+                            hsink.async_set_value(n, FizzBuzz::FizzBuzz).await.unwrap();
+                        }
+                    }
+                })
+                .unwrap()
+        };
+
+        spawner
+            .spawn(async move {
+                for n in 1..100 {
+                    hsink.async_set_value(n, FizzBuzz::Expected).await.unwrap();
+                    hgenerator.send_value(n);
+                }
+                drop(kgenerator);
+            })
+            .unwrap();
+
+        pool.run();
     }
     assert!(ksink.get().validate());
 }

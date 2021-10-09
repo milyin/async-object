@@ -20,6 +20,66 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+pub struct Keeper<T> {
+    subscribers: Arc<RwLock<Subscribers>>,
+    call_wakers: Arc<RwLock<Vec<Waker>>>,
+    object: Arc<RwLock<T>>,
+}
+
+impl<T> Clone for Keeper<T> {
+    fn clone(&self) -> Self {
+        Self {
+            subscribers: self.subscribers.clone(),
+            call_wakers: self.call_wakers.clone(),
+            object: self.object.clone(),
+        }
+    }
+}
+
+impl<T> Drop for Keeper<T> {
+    fn drop(&mut self) {
+        self.call_wakers
+            .write()
+            .unwrap()
+            .drain(..)
+            .for_each(|w| w.wake());
+    }
+}
+
+impl<T> Keeper<T> {
+    pub fn new(object: T) -> Self {
+        Self {
+            subscribers: Arc::new(RwLock::new(Subscribers::new())),
+            call_wakers: Arc::new(RwLock::new(Vec::new())),
+            object: Arc::new(RwLock::new(object)),
+        }
+    }
+    pub fn tag(&self) -> Tag<T> {
+        let object = Arc::downgrade(&self.object);
+        let subscribers = Arc::downgrade(&self.subscribers);
+        let call_wakers = Arc::downgrade(&self.call_wakers);
+        Tag::new(object, subscribers, call_wakers)
+    }
+    pub fn get(&self) -> RwLockReadGuard<'_, T> {
+        self.object.read().unwrap()
+    }
+    pub fn get_mut(&self) -> RwLockWriteGuard<'_, T> {
+        self.object.write().unwrap()
+    }
+    pub fn try_get(&self) -> Option<RwLockReadGuard<'_, T>> {
+        self.object.try_read().ok()
+    }
+    pub fn try_get_mut(&self) -> Option<RwLockWriteGuard<'_, T>> {
+        self.object.try_write().ok()
+    }
+}
+
+impl<T> AsRef<Arc<RwLock<T>>> for Keeper<T> {
+    fn as_ref(&self) -> &Arc<RwLock<T>> {
+        &self.object
+    }
+}
+
 struct Subscribers {
     subscribers: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
@@ -300,6 +360,29 @@ impl<T: 'static> Tag<T> {
     ) -> impl Future<Output = crate::Result<R>> {
         new_async_call_mut(self.clone(), f)
     }
+    pub fn call<R, F: FnOnce(&T) -> R>(&self, f: F) -> crate::Result<R> {
+        if let Some(object) = self.object.upgrade() {
+            if let Some(object) = object.try_read().ok() {
+                Ok(f(&*object))
+            } else {
+                Err(Error::Busy)
+            }
+        } else {
+            Err(Error::Destroyed)
+        }
+    }
+    pub fn call_mut<R, F: FnOnce(&mut T) -> R>(&self, f: F) -> crate::Result<R> {
+        if let Some(object) = self.object.upgrade() {
+            if let Some(mut object) = object.try_write().ok() {
+                Ok(f(&mut *object))
+            } else {
+                Err(Error::Busy)
+            }
+        } else {
+            Err(Error::Destroyed)
+        }
+    }
+
     fn subscribe<EVT: Send + Sync + Clone + 'static>(
         &self,
         event_queue: Weak<RwLock<EventQueue<EVT>>>,
@@ -315,59 +398,5 @@ impl<T: 'static> Tag<T> {
         if let Some(subscribers) = self.subscribers.upgrade() {
             subscribers.write().unwrap().send_event(event)
         }
-    }
-}
-
-pub struct Keeper<T> {
-    subscribers: Arc<RwLock<Subscribers>>,
-    call_wakers: Arc<RwLock<Vec<Waker>>>,
-    object: Arc<RwLock<T>>,
-}
-
-impl<T> Clone for Keeper<T> {
-    fn clone(&self) -> Self {
-        Self {
-            subscribers: self.subscribers.clone(),
-            call_wakers: self.call_wakers.clone(),
-            object: self.object.clone(),
-        }
-    }
-}
-
-impl<T> Drop for Keeper<T> {
-    fn drop(&mut self) {
-        self.call_wakers
-            .write()
-            .unwrap()
-            .drain(..)
-            .for_each(|w| w.wake());
-    }
-}
-
-impl<T> Keeper<T> {
-    pub fn new(object: T) -> Self {
-        Self {
-            subscribers: Arc::new(RwLock::new(Subscribers::new())),
-            call_wakers: Arc::new(RwLock::new(Vec::new())),
-            object: Arc::new(RwLock::new(object)),
-        }
-    }
-    pub fn tag(&self) -> Tag<T> {
-        let object = Arc::downgrade(&self.object);
-        let subscribers = Arc::downgrade(&self.subscribers);
-        let call_wakers = Arc::downgrade(&self.call_wakers);
-        Tag::new(object, subscribers, call_wakers)
-    }
-    pub fn get(&self) -> RwLockReadGuard<'_, T> {
-        self.object.read().unwrap()
-    }
-    pub fn get_mut(&self) -> RwLockWriteGuard<'_, T> {
-        self.object.write().unwrap()
-    }
-}
-
-impl<T> AsRef<Arc<RwLock<T>>> for Keeper<T> {
-    fn as_ref(&self) -> &Arc<RwLock<T>> {
-        &self.object
     }
 }
