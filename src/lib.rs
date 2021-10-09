@@ -297,11 +297,20 @@ impl<T: 'static> Tag<T> {
     }
 }
 
-#[derive(Clone)]
 pub struct Keeper<T> {
     subscribers: Arc<RwLock<Subscribers>>,
     call_wakers: Arc<RwLock<Vec<Waker>>>,
     object: Arc<RwLock<T>>,
+}
+
+impl<T> Clone for Keeper<T> {
+    fn clone(&self) -> Self {
+        Self {
+            subscribers: self.subscribers.clone(),
+            call_wakers: self.call_wakers.clone(),
+            object: self.object.clone(),
+        }
+    }
 }
 
 impl<T> Drop for Keeper<T> {

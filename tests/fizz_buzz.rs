@@ -1,6 +1,6 @@
 use std::sync::{mpsc::channel, Arc, RwLock};
 
-use async_object::{Tag, Keeper};
+use async_object::{Keeper, Tag};
 use futures::{executor::ThreadPool, join, task::SpawnExt, Stream, StreamExt};
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
@@ -59,6 +59,7 @@ impl HSink {
     }
 }
 
+#[derive(Clone)]
 struct KSink(Keeper<Sink>);
 
 impl KSink {
