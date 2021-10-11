@@ -309,11 +309,20 @@ impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future for AsyncC
     }
 }
 
-#[derive(Default)]
 pub struct Tag<T: 'static> {
     object: Weak<RwLock<T>>,
     subscribers: Weak<RwLock<Subscribers>>,
     call_wakers: Weak<RwLock<Vec<Waker>>>,
+}
+
+impl<T> Default for Tag<T> {
+    fn default() -> Self {
+        Self {
+            object: Default::default(),
+            subscribers: Default::default(),
+            call_wakers: Default::default(),
+        }
+    }
 }
 
 impl<T: 'static> Clone for Tag<T> {
