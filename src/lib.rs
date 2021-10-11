@@ -309,6 +309,7 @@ impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future for AsyncC
     }
 }
 
+#[derive(Default)]
 pub struct Tag<T: 'static> {
     object: Weak<RwLock<T>>,
     subscribers: Weak<RwLock<Subscribers>>,
