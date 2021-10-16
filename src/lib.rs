@@ -185,7 +185,7 @@ impl<EVT: Send + Sync> EventQueue<EVT> {
     }
 }
 
-struct EventStream<EVT: Send + Sync + Clone + 'static> {
+pub struct EventStream<EVT: Send + Sync + Clone + 'static> {
     event_queue: Arc<RwLock<EventQueue<EVT>>>,
 }
 
@@ -346,6 +346,9 @@ impl<T: 'static> Tag<T> {
             subscribers,
             call_wakers,
         }
+    }
+    pub fn is_valid(&self) -> bool {
+        self.object.strong_count() > 0
     }
     fn add_call_waker(&self, waker: Waker) {
         let wakers = self.call_wakers.upgrade().unwrap();
