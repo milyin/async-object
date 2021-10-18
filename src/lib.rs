@@ -320,7 +320,7 @@ pub struct Tag<T: 'static> {
 
 impl<T> Default for Tag<T> {
     fn default() -> Self {
-        Self {
+        Self {<
             object: Default::default(),
             subscribers: Default::default(),
             call_wakers: Default::default(),
@@ -335,6 +335,12 @@ impl<T: 'static> Clone for Tag<T> {
             subscribers: self.subscribers.clone(),
             call_wakers: self.call_wakers.clone(),
         }
+    }
+}
+
+impl<T: 'static> PartialEq for Tag<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.object.ptr_eq(&other.object)
     }
 }
 
