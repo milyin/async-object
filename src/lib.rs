@@ -72,6 +72,9 @@ impl<T> Keeper<T> {
     pub fn try_get_mut(&self) -> Option<RwLockWriteGuard<'_, T>> {
         self.object.try_write().ok()
     }
+    pub fn send_event<EVT: Send + Sync + Clone + 'static>(&self, event: EVT) {
+        self.subscribers.write().unwrap().send_event(event)
+    }
 }
 
 impl<T> AsRef<Arc<RwLock<T>>> for Keeper<T> {
@@ -403,9 +406,6 @@ impl<T: 'static> Tag<T> {
         if let Some(subscribers) = self.subscribers.upgrade() {
             subscribers.write().unwrap().subscribe(event_queue)
         }
-    }
-    pub fn receive_events<EVT: Send + Sync + Clone + 'static>(&self) -> impl Stream<Item = EVT> {
-        EventStream::new(self.clone())
     }
     pub fn send_event<EVT: Send + Sync + Clone + 'static>(&self, event: EVT) {
         if let Some(subscribers) = self.subscribers.upgrade() {

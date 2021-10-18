@@ -1,11 +1,11 @@
 use std::sync::{mpsc::channel, Arc, RwLock, RwLockReadGuard};
 
-use async_object::{Keeper, Tag};
+use async_object::{EventStream, Keeper, Tag};
 use futures::{
     executor::{LocalPool, ThreadPool},
     join,
     task::SpawnExt,
-    Stream, StreamExt,
+    StreamExt,
 };
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
@@ -95,11 +95,8 @@ struct Generator;
 #[derive(Clone)]
 struct HGenerator(Tag<Generator>);
 impl HGenerator {
-    fn values(&self) -> impl Stream<Item = usize> {
-        self.0.receive_events()
-    }
-    fn send_value(&self, value: usize) {
-        self.0.send_event(value)
+    fn values(&self) -> EventStream<usize> {
+        EventStream::new(self.0.clone())
     }
 }
 
@@ -110,6 +107,9 @@ impl KGenerator {
     }
     pub fn handle(&self) -> HGenerator {
         HGenerator(self.0.tag())
+    }
+    fn send_value(&self, value: usize) {
+        self.0.send_event(value)
     }
 }
 
@@ -173,7 +173,7 @@ fn fizz_buzz_threadpool_async_call() {
         pool.spawn_ok(async move {
             for n in 1..100 {
                 hsink.async_set_value(n, FizzBuzz::Expected).await.unwrap();
-                hgenerator.send_value(n);
+                kgenerator.send_value(n);
             }
             drop(kgenerator);
         });
@@ -252,7 +252,7 @@ fn fizz_buzz_localpool_sync_call() {
             .spawn(async move {
                 for n in 1..100 {
                     hsink.async_set_value(n, FizzBuzz::Expected).await.unwrap();
-                    hgenerator.send_value(n);
+                    kgenerator.send_value(n);
                 }
                 drop(kgenerator);
             })
