@@ -320,7 +320,7 @@ pub struct Tag<T: 'static> {
 
 impl<T> Default for Tag<T> {
     fn default() -> Self {
-        Self {<
+        Self {
             object: Default::default(),
             subscribers: Default::default(),
             call_wakers: Default::default(),
