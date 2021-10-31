@@ -20,23 +20,25 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub struct Keeper<T> {
+pub struct Keeper<T, P: Clone = ()> {
     subscribers: Arc<RwLock<Subscribers>>,
     call_wakers: Arc<RwLock<Vec<Waker>>>,
     object: Arc<RwLock<T>>,
+    pocket: Arc<RwLock<P>>,
 }
 
-impl<T> Clone for Keeper<T> {
+impl<T, P: Clone> Clone for Keeper<T, P> {
     fn clone(&self) -> Self {
         Self {
             subscribers: self.subscribers.clone(),
             call_wakers: self.call_wakers.clone(),
             object: self.object.clone(),
+            pocket: self.pocket.clone(),
         }
     }
 }
 
-impl<T> Drop for Keeper<T> {
+impl<T, P: Clone> Drop for Keeper<T, P> {
     fn drop(&mut self) {
         self.call_wakers
             .write()
@@ -46,19 +48,21 @@ impl<T> Drop for Keeper<T> {
     }
 }
 
-impl<T> Keeper<T> {
-    pub fn new(object: T) -> Self {
+impl<T, P: Clone> Keeper<T, P> {
+    pub fn new(object: T, pocket: Arc<RwLock<P>>) -> Self {
         Self {
             subscribers: Arc::new(RwLock::new(Subscribers::new())),
             call_wakers: Arc::new(RwLock::new(Vec::new())),
             object: Arc::new(RwLock::new(object)),
+            pocket: pocket,
         }
     }
-    pub fn tag(&self) -> Tag<T> {
+    pub fn tag(&self) -> Tag<T, P> {
         let object = Arc::downgrade(&self.object);
         let subscribers = Arc::downgrade(&self.subscribers);
         let call_wakers = Arc::downgrade(&self.call_wakers);
-        Tag::new(object, subscribers, call_wakers)
+        let pocket = Arc::downgrade(&self.pocket);
+        Tag::new(object, subscribers, call_wakers, pocket)
     }
     pub fn get(&self) -> RwLockReadGuard<'_, T> {
         self.object.read().unwrap()
@@ -74,6 +78,9 @@ impl<T> Keeper<T> {
     }
     pub fn send_event<EVT: Send + Sync + Clone + 'static>(&self, event: EVT) {
         self.subscribers.write().unwrap().send_event(event)
+    }
+    pub fn pocket(&self) -> P {
+        self.pocket.read().unwrap().clone()
     }
 }
 
@@ -193,7 +200,7 @@ pub struct EventStream<EVT: Send + Sync + Clone + 'static> {
 }
 
 impl<EVT: Send + Sync + Clone + 'static> EventStream<EVT> {
-    pub fn new<T>(tag: Tag<T>) -> Self {
+    pub fn new<T, P: Clone>(tag: Tag<T, P>) -> Self {
         let event_queue = Arc::new(RwLock::new(EventQueue::new()));
         let weak_event_queue = Arc::downgrade(&mut (event_queue.clone()));
         tag.subscribe(weak_event_queue);
@@ -230,42 +237,43 @@ enum Either<F, FMut> {
     Fmut(FMut),
 }
 
-struct AsyncCall<T: 'static, R, F, FMut>
+struct AsyncCall<T: 'static, P: Clone, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
 {
-    tag: Tag<T>,
+    tag: Tag<T, P>,
     func: Option<Either<Box<F>, Box<FMut>>>,
     _phantom: PhantomData<Box<(T, R)>>,
 }
 
-fn new_async_call<T, R, F: FnOnce(&T) -> R>(
-    tag: Tag<T>,
+fn new_async_call<T, P: Clone, R, F: FnOnce(&T) -> R>(
+    tag: Tag<T, P>,
     f: F,
-) -> AsyncCall<T, R, F, fn(&mut T) -> R> {
+) -> AsyncCall<T, P, R, F, fn(&mut T) -> R> {
     AsyncCall::new(tag, f)
 }
-fn new_async_call_mut<T, R, FMut: FnOnce(&mut T) -> R>(
-    tag: Tag<T>,
+
+fn new_async_call_mut<T, P: Clone, R, FMut: FnOnce(&mut T) -> R>(
+    tag: Tag<T, P>,
     f: FMut,
-) -> AsyncCall<T, R, fn(&T) -> R, FMut> {
+) -> AsyncCall<T, P, R, fn(&T) -> R, FMut> {
     AsyncCall::new_mut(tag, f)
 }
 
-impl<T: 'static, R, F, FMut> AsyncCall<T, R, F, FMut>
+impl<T: 'static, P: Clone, R, F, FMut> AsyncCall<T, P, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
 {
-    fn new(tag: Tag<T>, func: F) -> Self {
+    fn new(tag: Tag<T, P>, func: F) -> Self {
         Self {
             tag,
             func: Some(Either::F(Box::new(func))),
             _phantom: PhantomData,
         }
     }
-    fn new_mut(tag: Tag<T>, func: FMut) -> Self {
+    fn new_mut(tag: Tag<T, P>, func: FMut) -> Self {
         Self {
             tag,
             func: Some(Either::Fmut(Box::new(func))),
@@ -305,55 +313,62 @@ where
     }
 }
 
-impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future for AsyncCall<T, R, F, FMut> {
+impl<T: Any, P: Clone, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
+    for AsyncCall<T, P, R, F, FMut>
+{
     type Output = crate::Result<R>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().poll(cx)
     }
 }
 
-pub struct Tag<T: 'static> {
+pub struct Tag<T: 'static, P: Clone> {
     object: Weak<RwLock<T>>,
     subscribers: Weak<RwLock<Subscribers>>,
     call_wakers: Weak<RwLock<Vec<Waker>>>,
+    pocket: Weak<RwLock<P>>,
 }
 
-impl<T> Default for Tag<T> {
+impl<T, P: Clone> Default for Tag<T, P> {
     fn default() -> Self {
         Self {
             object: Default::default(),
             subscribers: Default::default(),
             call_wakers: Default::default(),
+            pocket: Default::default(),
         }
     }
 }
 
-impl<T: 'static> Clone for Tag<T> {
+impl<T: 'static, P: Clone> Clone for Tag<T, P> {
     fn clone(&self) -> Self {
         Self {
             object: self.object.clone(),
             subscribers: self.subscribers.clone(),
             call_wakers: self.call_wakers.clone(),
+            pocket: self.pocket.clone(),
         }
     }
 }
 
-impl<T: 'static> PartialEq for Tag<T> {
+impl<T: 'static, P: Clone> PartialEq for Tag<T, P> {
     fn eq(&self, other: &Self) -> bool {
         self.object.ptr_eq(&other.object)
     }
 }
 
-impl<T: 'static> Tag<T> {
+impl<T: 'static, P: Clone> Tag<T, P> {
     fn new(
         object: Weak<RwLock<T>>,
         subscribers: Weak<RwLock<Subscribers>>,
         call_wakers: Weak<RwLock<Vec<Waker>>>,
+        pocket: Weak<RwLock<P>>,
     ) -> Self {
         Self {
             object,
             subscribers,
             call_wakers,
+            pocket,
         }
     }
     pub fn is_valid(&self) -> bool {
@@ -416,6 +431,13 @@ impl<T: 'static> Tag<T> {
     pub fn send_event<EVT: Send + Sync + Clone + 'static>(&self, event: EVT) {
         if let Some(subscribers) = self.subscribers.upgrade() {
             subscribers.write().unwrap().send_event(event)
+        }
+    }
+    pub fn pocket(&self) -> crate::Result<P> {
+        if let Some(pocket) = self.pocket.upgrade() {
+            Ok(pocket.read().unwrap().clone())
+        } else {
+            Err(Error::Destroyed)
         }
     }
 }
