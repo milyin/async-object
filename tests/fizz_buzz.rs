@@ -56,7 +56,7 @@ impl Sink {
 }
 
 #[derive(Clone)]
-struct HSink(Tag<Sink>);
+struct HSink(Tag<Sink, ()>);
 
 impl HSink {
     async fn async_set_value(&self, pos: usize, value: FizzBuzz) -> async_object::Result<()> {
@@ -93,7 +93,7 @@ impl AsRef<Arc<RwLock<Sink>>> for KSink {
 struct Generator;
 
 #[derive(Clone)]
-struct HGenerator(Tag<Generator>);
+struct HGenerator(Tag<Generator, ()>);
 impl HGenerator {
     fn values(&self) -> EventStream<usize> {
         EventStream::new(self.0.clone())

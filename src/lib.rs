@@ -24,7 +24,7 @@ pub struct Keeper<T, P: Clone = ()> {
     subscribers: Arc<RwLock<Subscribers>>,
     call_wakers: Arc<RwLock<Vec<Waker>>>,
     object: Arc<RwLock<T>>,
-    pocket: Arc<RwLock<P>>,
+    shared: Arc<RwLock<P>>,
 }
 
 impl<T, P: Clone> Clone for Keeper<T, P> {
@@ -33,7 +33,7 @@ impl<T, P: Clone> Clone for Keeper<T, P> {
             subscribers: self.subscribers.clone(),
             call_wakers: self.call_wakers.clone(),
             object: self.object.clone(),
-            pocket: self.pocket.clone(),
+            shared: self.shared.clone(),
         }
     }
 }
@@ -48,21 +48,32 @@ impl<T, P: Clone> Drop for Keeper<T, P> {
     }
 }
 
-impl<T, P: Clone> Keeper<T, P> {
-    pub fn new(object: T, pocket: Arc<RwLock<P>>) -> Self {
+impl<T, P: Clone + Default> Keeper<T, P> {
+    pub fn new(object: T) -> Self {
         Self {
             subscribers: Arc::new(RwLock::new(Subscribers::new())),
             call_wakers: Arc::new(RwLock::new(Vec::new())),
             object: Arc::new(RwLock::new(object)),
-            pocket: pocket,
+            shared: Arc::new(RwLock::new(P::default())),
+        }
+    }
+}
+
+impl<T, P: Clone> Keeper<T, P> {
+    pub fn new_with_shared(object: T, shared: Arc<RwLock<P>>) -> Self {
+        Self {
+            subscribers: Arc::new(RwLock::new(Subscribers::new())),
+            call_wakers: Arc::new(RwLock::new(Vec::new())),
+            object: Arc::new(RwLock::new(object)),
+            shared,
         }
     }
     pub fn tag(&self) -> Tag<T, P> {
         let object = Arc::downgrade(&self.object);
         let subscribers = Arc::downgrade(&self.subscribers);
         let call_wakers = Arc::downgrade(&self.call_wakers);
-        let pocket = Arc::downgrade(&self.pocket);
-        Tag::new(object, subscribers, call_wakers, pocket)
+        let shared = Arc::downgrade(&self.shared);
+        Tag::new(object, subscribers, call_wakers, shared)
     }
     pub fn get(&self) -> RwLockReadGuard<'_, T> {
         self.object.read().unwrap()
@@ -79,8 +90,8 @@ impl<T, P: Clone> Keeper<T, P> {
     pub fn send_event<EVT: Send + Sync + Clone + 'static>(&self, event: EVT) {
         self.subscribers.write().unwrap().send_event(event)
     }
-    pub fn pocket(&self) -> P {
-        self.pocket.read().unwrap().clone()
+    pub fn shared(&self) -> P {
+        self.shared.read().unwrap().clone()
     }
 }
 
@@ -326,7 +337,7 @@ pub struct Tag<T: 'static, P: Clone> {
     object: Weak<RwLock<T>>,
     subscribers: Weak<RwLock<Subscribers>>,
     call_wakers: Weak<RwLock<Vec<Waker>>>,
-    pocket: Weak<RwLock<P>>,
+    shared: Weak<RwLock<P>>,
 }
 
 impl<T, P: Clone> Default for Tag<T, P> {
@@ -335,7 +346,7 @@ impl<T, P: Clone> Default for Tag<T, P> {
             object: Default::default(),
             subscribers: Default::default(),
             call_wakers: Default::default(),
-            pocket: Default::default(),
+            shared: Default::default(),
         }
     }
 }
@@ -346,7 +357,7 @@ impl<T: 'static, P: Clone> Clone for Tag<T, P> {
             object: self.object.clone(),
             subscribers: self.subscribers.clone(),
             call_wakers: self.call_wakers.clone(),
-            pocket: self.pocket.clone(),
+            shared: self.shared.clone(),
         }
     }
 }
@@ -362,13 +373,13 @@ impl<T: 'static, P: Clone> Tag<T, P> {
         object: Weak<RwLock<T>>,
         subscribers: Weak<RwLock<Subscribers>>,
         call_wakers: Weak<RwLock<Vec<Waker>>>,
-        pocket: Weak<RwLock<P>>,
+        shared: Weak<RwLock<P>>,
     ) -> Self {
         Self {
             object,
             subscribers,
             call_wakers,
-            pocket,
+            shared,
         }
     }
     pub fn is_valid(&self) -> bool {
@@ -433,9 +444,9 @@ impl<T: 'static, P: Clone> Tag<T, P> {
             subscribers.write().unwrap().send_event(event)
         }
     }
-    pub fn pocket(&self) -> crate::Result<P> {
-        if let Some(pocket) = self.pocket.upgrade() {
-            Ok(pocket.read().unwrap().clone())
+    pub fn shared(&self) -> crate::Result<P> {
+        if let Some(shared) = self.shared.upgrade() {
+            Ok(shared.read().unwrap().clone())
         } else {
             Err(Error::Destroyed)
         }
