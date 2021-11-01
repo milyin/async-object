@@ -338,7 +338,7 @@ impl<T: Any, P, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
     }
 }
 
-pub struct Tag<T: 'static, P> {
+pub struct Tag<T: 'static, P = ()> {
     object: Weak<RwLock<T>>,
     subscribers: Weak<RwLock<Subscribers>>,
     call_wakers: Weak<RwLock<Vec<Waker>>>,
