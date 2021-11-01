@@ -20,14 +20,14 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub struct Keeper<T, P: Clone = ()> {
+pub struct Keeper<T, P = ()> {
     subscribers: Arc<RwLock<Subscribers>>,
     call_wakers: Arc<RwLock<Vec<Waker>>>,
     object: Arc<RwLock<T>>,
     shared: Arc<RwLock<P>>,
 }
 
-impl<T, P: Clone> Clone for Keeper<T, P> {
+impl<T, P> Clone for Keeper<T, P> {
     fn clone(&self) -> Self {
         Self {
             subscribers: self.subscribers.clone(),
@@ -38,7 +38,7 @@ impl<T, P: Clone> Clone for Keeper<T, P> {
     }
 }
 
-impl<T, P: Clone> Drop for Keeper<T, P> {
+impl<T, P> Drop for Keeper<T, P> {
     fn drop(&mut self) {
         self.call_wakers
             .write()
@@ -48,7 +48,7 @@ impl<T, P: Clone> Drop for Keeper<T, P> {
     }
 }
 
-impl<T, P: Clone + Default> Keeper<T, P> {
+impl<T, P: Default> Keeper<T, P> {
     pub fn new(object: T) -> Self {
         Self {
             subscribers: Arc::new(RwLock::new(Subscribers::new())),
@@ -59,7 +59,7 @@ impl<T, P: Clone + Default> Keeper<T, P> {
     }
 }
 
-impl<T, P: Clone> Keeper<T, P> {
+impl<T, P> Keeper<T, P> {
     pub fn new_with_shared(object: T, shared: Arc<RwLock<P>>) -> Self {
         Self {
             subscribers: Arc::new(RwLock::new(Subscribers::new())),
@@ -90,7 +90,12 @@ impl<T, P: Clone> Keeper<T, P> {
     pub fn send_event<EVT: Send + Sync + Clone + 'static>(&self, event: EVT) {
         self.subscribers.write().unwrap().send_event(event)
     }
-    pub fn shared(&self) -> P {
+    pub fn get_shared(&self) -> RwLockReadGuard<'_, P> {
+        self.shared.read().unwrap()
+    }
+}
+impl<T, P: Clone> Keeper<T, P> {
+    pub fn clone_shared(&self) -> P {
         self.shared.read().unwrap().clone()
     }
 }
@@ -211,7 +216,7 @@ pub struct EventStream<EVT: Send + Sync + Clone + 'static> {
 }
 
 impl<EVT: Send + Sync + Clone + 'static> EventStream<EVT> {
-    pub fn new<T, P: Clone>(tag: Tag<T, P>) -> Self {
+    pub fn new<T, P>(tag: Tag<T, P>) -> Self {
         let event_queue = Arc::new(RwLock::new(EventQueue::new()));
         let weak_event_queue = Arc::downgrade(&mut (event_queue.clone()));
         tag.subscribe(weak_event_queue);
@@ -248,7 +253,7 @@ enum Either<F, FMut> {
     Fmut(FMut),
 }
 
-struct AsyncCall<T: 'static, P: Clone, R, F, FMut>
+struct AsyncCall<T: 'static, P, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
@@ -258,21 +263,21 @@ where
     _phantom: PhantomData<Box<(T, R)>>,
 }
 
-fn new_async_call<T, P: Clone, R, F: FnOnce(&T) -> R>(
+fn new_async_call<T, P, R, F: FnOnce(&T) -> R>(
     tag: Tag<T, P>,
     f: F,
 ) -> AsyncCall<T, P, R, F, fn(&mut T) -> R> {
     AsyncCall::new(tag, f)
 }
 
-fn new_async_call_mut<T, P: Clone, R, FMut: FnOnce(&mut T) -> R>(
+fn new_async_call_mut<T, P, R, FMut: FnOnce(&mut T) -> R>(
     tag: Tag<T, P>,
     f: FMut,
 ) -> AsyncCall<T, P, R, fn(&T) -> R, FMut> {
     AsyncCall::new_mut(tag, f)
 }
 
-impl<T: 'static, P: Clone, R, F, FMut> AsyncCall<T, P, R, F, FMut>
+impl<T: 'static, P, R, F, FMut> AsyncCall<T, P, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
@@ -324,7 +329,7 @@ where
     }
 }
 
-impl<T: Any, P: Clone, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
+impl<T: Any, P, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
     for AsyncCall<T, P, R, F, FMut>
 {
     type Output = crate::Result<R>;
@@ -333,14 +338,14 @@ impl<T: Any, P: Clone, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
     }
 }
 
-pub struct Tag<T: 'static, P: Clone> {
+pub struct Tag<T: 'static, P> {
     object: Weak<RwLock<T>>,
     subscribers: Weak<RwLock<Subscribers>>,
     call_wakers: Weak<RwLock<Vec<Waker>>>,
     shared: Weak<RwLock<P>>,
 }
 
-impl<T, P: Clone> Default for Tag<T, P> {
+impl<T, P> Default for Tag<T, P> {
     fn default() -> Self {
         Self {
             object: Default::default(),
@@ -351,7 +356,7 @@ impl<T, P: Clone> Default for Tag<T, P> {
     }
 }
 
-impl<T: 'static, P: Clone> Clone for Tag<T, P> {
+impl<T: 'static, P> Clone for Tag<T, P> {
     fn clone(&self) -> Self {
         Self {
             object: self.object.clone(),
@@ -362,13 +367,13 @@ impl<T: 'static, P: Clone> Clone for Tag<T, P> {
     }
 }
 
-impl<T: 'static, P: Clone> PartialEq for Tag<T, P> {
+impl<T: 'static, P> PartialEq for Tag<T, P> {
     fn eq(&self, other: &Self) -> bool {
         self.object.ptr_eq(&other.object)
     }
 }
 
-impl<T: 'static, P: Clone> Tag<T, P> {
+impl<T: 'static, P> Tag<T, P> {
     fn new(
         object: Weak<RwLock<T>>,
         subscribers: Weak<RwLock<Subscribers>>,
@@ -444,7 +449,17 @@ impl<T: 'static, P: Clone> Tag<T, P> {
             subscribers.write().unwrap().send_event(event)
         }
     }
-    pub fn shared(&self) -> crate::Result<P> {
+    pub fn read_shared<V, F: Fn(&P) -> V>(&self, f: F) -> crate::Result<V> {
+        if let Some(shared) = self.shared.upgrade() {
+            Ok(f(&*shared.read().unwrap()))
+        } else {
+            Err(Error::Destroyed)
+        }
+    }
+}
+
+impl<T: 'static, P: Clone> Tag<T, P> {
+    pub fn clone_shared(&self) -> crate::Result<P> {
         if let Some(shared) = self.shared.upgrade() {
             Ok(shared.read().unwrap().clone())
         } else {
