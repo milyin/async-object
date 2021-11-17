@@ -8,53 +8,61 @@ use std::{
 
 #[derive(Clone)]
 struct CounterShared {
-    value: usize,
+    shared_value: usize,
 }
 
-struct Counter {
-    value: usize,
+struct CounterImpl {
+    internal_value: usize,
     shared: Arc<RwLock<CounterShared>>,
 }
 
-impl Counter {
+impl CounterImpl {
     fn new() -> Self {
         Self {
-            value: 0,
-            shared: Arc::new(RwLock::new(CounterShared { value: 0 })),
+            internal_value: 0,
+            shared: Arc::new(RwLock::new(CounterShared { shared_value: 0 })),
         }
     }
     fn inc(&mut self) {
-        self.value += 1;
-        self.shared.write().unwrap().value = self.value;
+        self.internal_value += 1;
+        self.shared.write().unwrap().shared_value = self.internal_value;
     }
-    fn value(&self) -> usize {
-        self.value
+    fn internal_value(&self) -> usize {
+        self.internal_value
+    }
+    fn shared_value(&self) -> usize {
+        self.shared.read().unwrap().shared_value
     }
 }
 
-struct HCounter(Tag<Counter, CounterShared>);
+struct TCounter(Tag<CounterImpl, CounterShared>);
 
-impl HCounter {
+impl TCounter {
     async fn inc(&self) -> async_object::Result<()> {
         self.0
-            .async_call_mut(|counter: &mut Counter| counter.inc())
+            .async_call_mut(|counter: &mut CounterImpl| counter.inc())
             .await
     }
-    async fn value(&self) -> async_object::Result<usize> {
-        self.0.async_call(|counter: &Counter| counter.value()).await
+    async fn internal_value(&self) -> async_object::Result<usize> {
+        self.0
+            .async_call(|counter: &CounterImpl| counter.internal_value())
+            .await
+    }
+    fn shared_value(&self) -> async_object::Result<usize> {
+        self.0.clone_shared().map(|v| v.shared_value)
     }
 }
 
-struct KCounter(Keeper<Counter, CounterShared>);
+struct Counter(Keeper<CounterImpl, CounterShared>);
 
-impl KCounter {
+impl Counter {
     fn new() -> Self {
-        let counter = Counter::new();
+        let counter = CounterImpl::new();
         let shared = counter.shared.clone();
         Self(Keeper::new_with_shared(counter, shared))
     }
-    fn handle(&self) -> HCounter {
-        HCounter(self.0.tag())
+    fn tag(&self) -> TCounter {
+        TCounter(self.0.tag())
     }
 }
 
@@ -63,11 +71,11 @@ fn test_handle_call() {
     let test_value = Rc::new(RefCell::new(None));
     let test_value_r = test_value.clone();
 
-    let kvalue = KCounter::new();
-    let hvalue = kvalue.handle();
+    let counter = Counter::new();
+    let tcounter = counter.tag();
 
     let future = async move {
-        let v = hvalue.value().await.unwrap();
+        let v = tcounter.internal_value().await.unwrap();
         *(test_value.borrow_mut()) = Some(v);
     };
     let mut pool = LocalPool::new();
@@ -83,19 +91,20 @@ fn test_handle_call_mut() {
     let test_value_shared = Rc::new(RefCell::new(None));
     let test_value_shared_r = test_value_shared.clone();
 
-    let kvalue = KCounter::new();
-    let hvalue = kvalue.handle();
+    let counter = Counter::new();
+    let tcounter = counter.tag();
 
     let future = async move {
-        hvalue.inc().await.unwrap();
-        let v = hvalue.value().await.unwrap();
+        tcounter.inc().await.unwrap();
+        let v = tcounter.internal_value().await.unwrap();
         *(test_value.borrow_mut()) = Some(v);
-        *(test_value_shared.borrow_mut()) = Some(hvalue.0.shared().unwrap());
+        *(test_value_shared.borrow_mut()) = Some(tcounter.shared_value().unwrap());
     };
     let mut pool = LocalPool::new();
     pool.spawner().spawn_local(future).unwrap();
     pool.run_until_stalled();
     assert!(test_value_r.borrow().is_some());
     assert!(test_value_r.borrow().unwrap() == 1);
-    assert!(test_value_shared_r.borrow().as_ref().unwrap().value == 1);
+    assert!(test_value_shared_r.borrow().is_some());
+    assert!(test_value_shared_r.borrow().unwrap() == 1);
 }

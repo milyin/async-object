@@ -27,17 +27,6 @@ pub struct Keeper<T, P = ()> {
     shared: Arc<RwLock<P>>,
 }
 
-impl<T, P> Clone for Keeper<T, P> {
-    fn clone(&self) -> Self {
-        Self {
-            subscribers: self.subscribers.clone(),
-            call_wakers: self.call_wakers.clone(),
-            object: self.object.clone(),
-            shared: self.shared.clone(),
-        }
-    }
-}
-
 impl<T, P> Drop for Keeper<T, P> {
     fn drop(&mut self) {
         self.call_wakers
@@ -78,16 +67,16 @@ impl<T, P> Keeper<T, P> {
     pub fn get(&self) -> RwLockReadGuard<'_, T> {
         self.object.read().unwrap()
     }
-    pub fn get_mut(&self) -> RwLockWriteGuard<'_, T> {
+    pub fn get_mut(&mut self) -> RwLockWriteGuard<'_, T> {
         self.object.write().unwrap()
     }
     pub fn try_get(&self) -> Option<RwLockReadGuard<'_, T>> {
         self.object.try_read().ok()
     }
-    pub fn try_get_mut(&self) -> Option<RwLockWriteGuard<'_, T>> {
+    pub fn try_get_mut(&mut self) -> Option<RwLockWriteGuard<'_, T>> {
         self.object.try_write().ok()
     }
-    pub fn send_event<EVT: Send + Sync + Clone + 'static>(&self, event: EVT) {
+    pub fn send_event<EVT: Send + Sync + Clone + 'static>(&mut self, event: EVT) {
         self.subscribers.write().unwrap().send_event(event)
     }
     pub fn get_shared(&self) -> RwLockReadGuard<'_, P> {
@@ -138,7 +127,7 @@ impl Subscribers {
         }
     }
 }
-pub struct EventSubscribers<EVT: Send + Sync + Clone> {
+struct EventSubscribers<EVT: Send + Sync + Clone> {
     event_subscribers: Vec<Weak<RwLock<EventQueue<EVT>>>>,
 }
 
@@ -156,6 +145,7 @@ impl<EVT: Send + Sync + Clone> EventSubscribers<EVT> {
             event_subscribers: Vec::new(),
         }
     }
+    #[allow(dead_code)]
     pub fn count(&self) -> usize {
         self.event_subscribers
             .iter()
@@ -182,7 +172,7 @@ impl<EVT: Send + Sync + Clone> EventSubscribers<EVT> {
             });
     }
 }
-pub struct EventQueue<EVT: Send + Sync> {
+struct EventQueue<EVT: Send + Sync> {
     detached: bool,
     waker: Option<Waker>,
     events: VecDeque<Box<EVT>>,
@@ -412,28 +402,6 @@ impl<T: 'static, P> Tag<T, P> {
         f: F,
     ) -> impl Future<Output = crate::Result<R>> {
         new_async_call_mut(self.clone(), f)
-    }
-    pub fn call<R, F: FnOnce(&T) -> R>(&self, f: F) -> crate::Result<R> {
-        if let Some(object) = self.object.upgrade() {
-            if let Some(object) = object.try_read().ok() {
-                Ok(f(&*object))
-            } else {
-                Err(Error::Busy)
-            }
-        } else {
-            Err(Error::Destroyed)
-        }
-    }
-    pub fn call_mut<R, F: FnOnce(&mut T) -> R>(&self, f: F) -> crate::Result<R> {
-        if let Some(object) = self.object.upgrade() {
-            if let Some(mut object) = object.try_write().ok() {
-                Ok(f(&mut *object))
-            } else {
-                Err(Error::Busy)
-            }
-        } else {
-            Err(Error::Destroyed)
-        }
     }
 
     fn subscribe<EVT: Send + Sync + Clone + 'static>(
