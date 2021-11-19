@@ -30,25 +30,22 @@ impl CounterImpl {
     fn internal_value(&self) -> usize {
         self.internal_value
     }
-    fn shared_value(&self) -> usize {
-        self.shared.read().unwrap().shared_value
-    }
 }
 
 struct TCounter(Tag<CounterImpl, CounterShared>);
 
 impl TCounter {
-    async fn inc(&self) -> async_object::Result<()> {
+    async fn inc(&self) -> Option<()> {
         self.0
             .async_call_mut(|counter: &mut CounterImpl| counter.inc())
             .await
     }
-    async fn internal_value(&self) -> async_object::Result<usize> {
+    async fn internal_value(&self) -> Option<usize> {
         self.0
             .async_call(|counter: &CounterImpl| counter.internal_value())
             .await
     }
-    fn shared_value(&self) -> async_object::Result<usize> {
+    fn shared_value(&self) -> Option<usize> {
         self.0.clone_shared().map(|v| v.shared_value)
     }
 }

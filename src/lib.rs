@@ -8,18 +8,6 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("Object was destroyed")]
-    Destroyed,
-    #[error("Object is busy")]
-    Busy,
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
-
 pub struct Keeper<T, P = ()> {
     subscribers: Arc<RwLock<Subscribers>>,
     call_wakers: Arc<RwLock<Vec<Waker>>>,
@@ -286,14 +274,14 @@ where
             _phantom: PhantomData,
         }
     }
-    fn poll(&mut self, cx: &Context) -> Poll<crate::Result<R>> {
+    fn poll(&mut self, cx: &Context) -> Poll<Option<R>> {
         if let Some(object) = self.tag.object.upgrade() {
             self.tag.add_call_waker(cx.waker().clone());
             let res = match self.func.take().unwrap() {
                 Either::F(func) => {
                     if let Ok(object) = object.try_read() {
                         let r = func(&*object);
-                        Poll::Ready(Ok(r))
+                        Poll::Ready(Some(r))
                     } else {
                         self.func = Some(Either::F(func));
                         Poll::Pending
@@ -302,7 +290,7 @@ where
                 Either::Fmut(func_mut) => {
                     if let Ok(mut object) = object.try_write() {
                         let r = func_mut(&mut *object);
-                        Poll::Ready(Ok(r))
+                        Poll::Ready(Some(r))
                     } else {
                         self.func = Some(Either::Fmut(func_mut));
                         Poll::Pending
@@ -314,7 +302,7 @@ where
             }
             res
         } else {
-            Poll::Ready(Err(Error::Destroyed))
+            Poll::Ready(None)
         }
     }
 }
@@ -322,7 +310,7 @@ where
 impl<T: Any, P, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
     for AsyncCall<T, P, R, F, FMut>
 {
-    type Output = crate::Result<R>;
+    type Output = Option<R>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().poll(cx)
     }
@@ -391,16 +379,13 @@ impl<T: 'static, P> Tag<T, P> {
         wakers.drain(..).for_each(|w| w.wake());
     }
 
-    pub fn async_call<R, F: FnOnce(&T) -> R>(
-        &self,
-        f: F,
-    ) -> impl Future<Output = crate::Result<R>> {
+    pub fn async_call<R, F: FnOnce(&T) -> R>(&self, f: F) -> impl Future<Output = Option<R>> {
         new_async_call(self.clone(), f)
     }
     pub fn async_call_mut<R, F: FnOnce(&mut T) -> R>(
         &self,
         f: F,
-    ) -> impl Future<Output = crate::Result<R>> {
+    ) -> impl Future<Output = Option<R>> {
         new_async_call_mut(self.clone(), f)
     }
 
@@ -417,21 +402,21 @@ impl<T: 'static, P> Tag<T, P> {
             subscribers.write().unwrap().send_event(event)
         }
     }
-    pub fn read_shared<V, F: Fn(&P) -> V>(&self, f: F) -> crate::Result<V> {
+    pub fn read_shared<V, F: Fn(&P) -> V>(&self, f: F) -> Option<V> {
         if let Some(shared) = self.shared.upgrade() {
-            Ok(f(&*shared.read().unwrap()))
+            Some(f(&*shared.read().unwrap()))
         } else {
-            Err(Error::Destroyed)
+            None
         }
     }
 }
 
 impl<T: 'static, P: Clone> Tag<T, P> {
-    pub fn clone_shared(&self) -> crate::Result<P> {
+    pub fn clone_shared(&self) -> Option<P> {
         if let Some(shared) = self.shared.upgrade() {
-            Ok(shared.read().unwrap().clone())
+            Some(shared.read().unwrap().clone())
         } else {
-            Err(Error::Destroyed)
+            None
         }
     }
 }
