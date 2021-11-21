@@ -235,22 +235,22 @@ enum Either<F, FMut> {
 
 struct AsyncCall<T: 'static, P, R, F, FMut>
 where
-    F: FnOnce(&T) -> R,
-    FMut: FnOnce(&mut T) -> R,
+    F: Fn(&T) -> R,
+    FMut: Fn(&mut T) -> R,
 {
     tag: Tag<T, P>,
     func: Option<Either<Box<F>, Box<FMut>>>,
     _phantom: PhantomData<Box<(T, R)>>,
 }
 
-fn new_async_call<T, P, R, F: FnOnce(&T) -> R>(
+fn new_async_call<T, P, R, F: Fn(&T) -> R>(
     tag: Tag<T, P>,
     f: F,
 ) -> AsyncCall<T, P, R, F, fn(&mut T) -> R> {
     AsyncCall::new(tag, f)
 }
 
-fn new_async_call_mut<T, P, R, FMut: FnOnce(&mut T) -> R>(
+fn new_async_call_mut<T, P, R, FMut: Fn(&mut T) -> R>(
     tag: Tag<T, P>,
     f: FMut,
 ) -> AsyncCall<T, P, R, fn(&T) -> R, FMut> {
@@ -259,8 +259,8 @@ fn new_async_call_mut<T, P, R, FMut: FnOnce(&mut T) -> R>(
 
 impl<T: 'static, P, R, F, FMut> AsyncCall<T, P, R, F, FMut>
 where
-    F: FnOnce(&T) -> R,
-    FMut: FnOnce(&mut T) -> R,
+    F: Fn(&T) -> R,
+    FMut: Fn(&mut T) -> R,
 {
     fn new(tag: Tag<T, P>, func: F) -> Self {
         Self {
@@ -309,9 +309,7 @@ where
     }
 }
 
-impl<T: Any, P, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
-    for AsyncCall<T, P, R, F, FMut>
-{
+impl<T: Any, P, R, F: Fn(&T) -> R, FMut: Fn(&mut T) -> R> Future for AsyncCall<T, P, R, F, FMut> {
     type Output = Option<R>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().poll(cx)
@@ -381,16 +379,30 @@ impl<T: 'static, P> Tag<T, P> {
         wakers.drain(..).for_each(|w| w.wake());
     }
 
-    pub fn async_call<R, F: FnOnce(&T) -> R>(&self, f: F) -> impl Future<Output = Option<R>> {
+    pub fn async_read<R, F: Fn(&T) -> R>(&self, f: F) -> impl Future<Output = Option<R>> {
         new_async_call(self.clone(), f)
     }
-    pub fn async_call_mut<R, F: FnOnce(&mut T) -> R>(
-        &self,
-        f: F,
-    ) -> impl Future<Output = Option<R>> {
+    pub fn async_write<R, F: Fn(&mut T) -> R>(&self, f: F) -> impl Future<Output = Option<R>> {
         new_async_call_mut(self.clone(), f)
     }
-
+    pub fn read<R, F: Fn(&T) -> R>(&self, f: F) -> Option<R> {
+        if let (Some(object), Some(wakers)) = (self.object.upgrade(), self.call_wakers.upgrade()) {
+            let v = f(&*object.read().unwrap());
+            drain_wakers(&wakers);
+            Some(v)
+        } else {
+            None
+        }
+    }
+    pub fn write<R, F: Fn(&mut T) -> R>(&self, f: F) -> Option<R> {
+        if let (Some(object), Some(wakers)) = (self.object.upgrade(), self.call_wakers.upgrade()) {
+            let v = f(&mut *object.write().unwrap());
+            drain_wakers(&wakers);
+            Some(v)
+        } else {
+            None
+        }
+    }
     fn subscribe<EVT: Send + Sync + Clone + 'static>(
         &self,
         event_queue: Weak<RwLock<EventQueue<EVT>>>,

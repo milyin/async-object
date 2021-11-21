@@ -60,9 +60,7 @@ struct TSink(Tag<SinkImpl>);
 
 impl TSink {
     async fn set_value(&self, pos: usize, value: FizzBuzz) -> Option<()> {
-        self.0
-            .async_call_mut(|sink| sink.set_value(pos, value))
-            .await
+        self.0.async_write(|sink| sink.set_value(pos, value)).await
     }
 }
 

@@ -37,12 +37,12 @@ struct TCounter(Tag<CounterImpl, CounterShared>);
 impl TCounter {
     async fn inc(&self) -> Option<()> {
         self.0
-            .async_call_mut(|counter: &mut CounterImpl| counter.inc())
+            .async_write(|counter: &mut CounterImpl| counter.inc())
             .await
     }
     async fn internal_value(&self) -> Option<usize> {
         self.0
-            .async_call(|counter: &CounterImpl| counter.internal_value())
+            .async_read(|counter: &CounterImpl| counter.internal_value())
             .await
     }
     fn shared_value(&self) -> Option<usize> {
