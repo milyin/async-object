@@ -8,14 +8,13 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-pub struct Keeper<T, P = ()> {
+pub struct Keeper<T> {
     subscribers: Arc<RwLock<Subscribers>>,
     call_wakers: Arc<RwLock<Vec<Waker>>>,
     object: Arc<RwLock<T>>,
-    shared: Arc<RwLock<P>>,
 }
 
-impl<T, P> Drop for Keeper<T, P> {
+impl<T> Drop for Keeper<T> {
     fn drop(&mut self) {
         self.call_wakers
             .write()
@@ -25,36 +24,23 @@ impl<T, P> Drop for Keeper<T, P> {
     }
 }
 
-impl<T, P: Default> Keeper<T, P> {
+fn drain_wakers(wakers: &Arc<RwLock<Vec<Waker>>>) {
+    wakers.write().unwrap().drain(..).for_each(|w| w.wake());
+}
+
+impl<T> Keeper<T> {
     pub fn new(object: T) -> Self {
         Self {
             subscribers: Arc::new(RwLock::new(Subscribers::new())),
             call_wakers: Arc::new(RwLock::new(Vec::new())),
             object: Arc::new(RwLock::new(object)),
-            shared: Arc::new(RwLock::new(P::default())),
         }
     }
-}
-
-fn drain_wakers(wakers: &Arc<RwLock<Vec<Waker>>>) {
-    wakers.write().unwrap().drain(..).for_each(|w| w.wake());
-}
-
-impl<T, P> Keeper<T, P> {
-    pub fn new_with_shared(object: T, shared: Arc<RwLock<P>>) -> Self {
-        Self {
-            subscribers: Arc::new(RwLock::new(Subscribers::new())),
-            call_wakers: Arc::new(RwLock::new(Vec::new())),
-            object: Arc::new(RwLock::new(object)),
-            shared,
-        }
-    }
-    pub fn tag(&self) -> Tag<T, P> {
+    pub fn tag(&self) -> Tag<T> {
         let object = Arc::downgrade(&self.object);
         let subscribers = Arc::downgrade(&self.subscribers);
         let call_wakers = Arc::downgrade(&self.call_wakers);
-        let shared = Arc::downgrade(&self.shared);
-        Tag::new(object, subscribers, call_wakers, shared)
+        Tag::new(object, subscribers, call_wakers)
     }
     pub fn read<V>(&self, f: impl FnOnce(&T) -> V) -> V {
         let v = f(&self.object.read().unwrap());
@@ -68,14 +54,6 @@ impl<T, P> Keeper<T, P> {
     }
     pub fn send_event<EVT: Send + Sync + Clone + 'static>(&mut self, event: EVT) {
         self.subscribers.write().unwrap().send_event(event)
-    }
-    pub fn read_shared<V>(&self, f: impl FnOnce(&P) -> V) -> V {
-        f(&self.shared.read().unwrap())
-    }
-}
-impl<T, P: Clone> Keeper<T, P> {
-    pub fn clone_shared(&self) -> P {
-        self.shared.read().unwrap().clone()
     }
 }
 
@@ -196,7 +174,7 @@ pub struct EventStream<EVT: Send + Sync + Clone + 'static> {
 }
 
 impl<EVT: Send + Sync + Clone + 'static> EventStream<EVT> {
-    pub fn new<T, P>(tag: Tag<T, P>) -> Self {
+    pub fn new<T>(tag: Tag<T>) -> Self {
         let event_queue = Arc::new(RwLock::new(EventQueue::new()));
         let weak_event_queue = Arc::downgrade(&mut (event_queue.clone()));
         tag.subscribe(weak_event_queue);
@@ -233,43 +211,43 @@ enum Either<F, FMut> {
     Fmut(FMut),
 }
 
-struct AsyncCall<T: 'static, P, R, F, FMut>
+struct AsyncCall<T: 'static, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
 {
-    tag: Tag<T, P>,
+    tag: Tag<T>,
     func: Option<Either<Box<F>, Box<FMut>>>,
     _phantom: PhantomData<Box<(T, R)>>,
 }
 
-fn new_async_call<T, P, R, F: FnOnce(&T) -> R>(
-    tag: Tag<T, P>,
+fn new_async_call<T, R, F: FnOnce(&T) -> R>(
+    tag: Tag<T>,
     f: F,
-) -> AsyncCall<T, P, R, F, fn(&mut T) -> R> {
+) -> AsyncCall<T, R, F, fn(&mut T) -> R> {
     AsyncCall::new(tag, f)
 }
 
-fn new_async_call_mut<T, P, R, FMut: FnOnce(&mut T) -> R>(
-    tag: Tag<T, P>,
+fn new_async_call_mut<T, R, FMut: FnOnce(&mut T) -> R>(
+    tag: Tag<T>,
     f: FMut,
-) -> AsyncCall<T, P, R, fn(&T) -> R, FMut> {
+) -> AsyncCall<T, R, fn(&T) -> R, FMut> {
     AsyncCall::new_mut(tag, f)
 }
 
-impl<T: 'static, P, R, F, FMut> AsyncCall<T, P, R, F, FMut>
+impl<T: 'static, R, F, FMut> AsyncCall<T, R, F, FMut>
 where
     F: FnOnce(&T) -> R,
     FMut: FnOnce(&mut T) -> R,
 {
-    fn new(tag: Tag<T, P>, func: F) -> Self {
+    fn new(tag: Tag<T>, func: F) -> Self {
         Self {
             tag,
             func: Some(Either::F(Box::new(func))),
             _phantom: PhantomData,
         }
     }
-    fn new_mut(tag: Tag<T, P>, func: FMut) -> Self {
+    fn new_mut(tag: Tag<T>, func: FMut) -> Self {
         Self {
             tag,
             func: Some(Either::Fmut(Box::new(func))),
@@ -309,62 +287,55 @@ where
     }
 }
 
-impl<T: Any, P, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
-    for AsyncCall<T, P, R, F, FMut>
-{
+impl<T: Any, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future for AsyncCall<T, R, F, FMut> {
     type Output = Option<R>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().poll(cx)
     }
 }
 
-pub struct Tag<T: 'static, P = ()> {
+pub struct Tag<T: 'static> {
     object: Weak<RwLock<T>>,
     subscribers: Weak<RwLock<Subscribers>>,
     call_wakers: Weak<RwLock<Vec<Waker>>>,
-    shared: Weak<RwLock<P>>,
 }
 
-impl<T, P> Default for Tag<T, P> {
+impl<T> Default for Tag<T> {
     fn default() -> Self {
         Self {
             object: Default::default(),
             subscribers: Default::default(),
             call_wakers: Default::default(),
-            shared: Default::default(),
         }
     }
 }
 
-impl<T: 'static, P> Clone for Tag<T, P> {
+impl<T: 'static> Clone for Tag<T> {
     fn clone(&self) -> Self {
         Self {
             object: self.object.clone(),
             subscribers: self.subscribers.clone(),
             call_wakers: self.call_wakers.clone(),
-            shared: self.shared.clone(),
         }
     }
 }
 
-impl<T: 'static, P> PartialEq for Tag<T, P> {
+impl<T: 'static> PartialEq for Tag<T> {
     fn eq(&self, other: &Self) -> bool {
         self.object.ptr_eq(&other.object)
     }
 }
 
-impl<T: 'static, P> Tag<T, P> {
+impl<T: 'static> Tag<T> {
     fn new(
         object: Weak<RwLock<T>>,
         subscribers: Weak<RwLock<Subscribers>>,
         call_wakers: Weak<RwLock<Vec<Waker>>>,
-        shared: Weak<RwLock<P>>,
     ) -> Self {
         Self {
             object,
             subscribers,
             call_wakers,
-            shared,
         }
     }
     pub fn is_valid(&self) -> bool {
@@ -416,23 +387,6 @@ impl<T: 'static, P> Tag<T, P> {
     pub fn send_event<EVT: Send + Sync + Clone + 'static>(&self, event: EVT) {
         if let Some(subscribers) = self.subscribers.upgrade() {
             subscribers.write().unwrap().send_event(event)
-        }
-    }
-    pub fn read_shared<V, F: FnOnce(&P) -> V>(&self, f: F) -> Option<V> {
-        if let Some(shared) = self.shared.upgrade() {
-            Some(f(&*shared.read().unwrap()))
-        } else {
-            None
-        }
-    }
-}
-
-impl<T: 'static, P: Clone> Tag<T, P> {
-    pub fn clone_shared(&self) -> Option<P> {
-        if let Some(shared) = self.shared.upgrade() {
-            Some(shared.read().unwrap().clone())
-        } else {
-            None
         }
     }
 }
