@@ -76,7 +76,7 @@ impl Sink {
         TSink(self.0.tag())
     }
     pub fn validate(&self) -> bool {
-        self.0.get().validate()
+        self.0.read(|sink| sink.validate())
     }
 }
 

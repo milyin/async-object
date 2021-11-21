@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, VecDeque},
     marker::PhantomData,
     pin::Pin,
-    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak},
+    sync::{Arc, RwLock, Weak},
     task::{Context, Poll, Waker},
 };
 
@@ -36,6 +36,10 @@ impl<T, P: Default> Keeper<T, P> {
     }
 }
 
+fn drain_wakers(wakers: &Arc<RwLock<Vec<Waker>>>) {
+    wakers.write().unwrap().drain(..).for_each(|w| w.wake());
+}
+
 impl<T, P> Keeper<T, P> {
     pub fn new_with_shared(object: T, shared: Arc<RwLock<P>>) -> Self {
         Self {
@@ -52,23 +56,21 @@ impl<T, P> Keeper<T, P> {
         let shared = Arc::downgrade(&self.shared);
         Tag::new(object, subscribers, call_wakers, shared)
     }
-    pub fn get(&self) -> RwLockReadGuard<'_, T> {
-        self.object.read().unwrap()
+    pub fn read<V>(&self, f: impl Fn(&T) -> V) -> V {
+        let v = f(&self.object.read().unwrap());
+        drain_wakers(&self.call_wakers);
+        v
     }
-    pub fn get_mut(&mut self) -> RwLockWriteGuard<'_, T> {
-        self.object.write().unwrap()
-    }
-    pub fn try_get(&self) -> Option<RwLockReadGuard<'_, T>> {
-        self.object.try_read().ok()
-    }
-    pub fn try_get_mut(&mut self) -> Option<RwLockWriteGuard<'_, T>> {
-        self.object.try_write().ok()
+    pub fn write<V>(&mut self, f: impl Fn(&mut T) -> V) -> V {
+        let v = f(&mut self.object.write().unwrap());
+        drain_wakers(&self.call_wakers);
+        v
     }
     pub fn send_event<EVT: Send + Sync + Clone + 'static>(&mut self, event: EVT) {
         self.subscribers.write().unwrap().send_event(event)
     }
-    pub fn get_shared(&self) -> RwLockReadGuard<'_, P> {
-        self.shared.read().unwrap()
+    pub fn read_shared<V>(&self, f: impl Fn(&P) -> V) -> V {
+        f(&self.shared.read().unwrap())
     }
 }
 impl<T, P: Clone> Keeper<T, P> {
