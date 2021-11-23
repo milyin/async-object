@@ -169,6 +169,31 @@ impl<EVT: Send + Sync> EventQueue<EVT> {
     }
 }
 
+pub struct EventBox {
+    event: Box<dyn Any + Send + Sync>,
+    waker: Option<Waker>,
+}
+
+impl Drop for EventBox {
+    fn drop(&mut self) {
+        if let Some(waker) = self.waker.take() {
+            waker.wake()
+        }
+    }
+}
+
+impl EventBox {
+    fn new(event: Box<dyn Any + Send + Sync>, waker: Waker) -> Self {
+        Self {
+            event,
+            waker: Some(waker),
+        }
+    }
+    pub fn get_event<'a, EVT: 'static + Send + Sync>(&'a self) -> Option<&'a EVT> {
+        self.event.downcast_ref()
+    }
+}
+
 pub struct EventStream<EVT: Send + Sync + Clone + 'static> {
     event_queue: Arc<RwLock<EventQueue<EVT>>>,
 }
@@ -388,5 +413,47 @@ impl<T: 'static> Tag<T> {
         if let Some(subscribers) = self.subscribers.upgrade() {
             subscribers.write().unwrap().send_event(event)
         }
+    }
+}
+pub struct EventSequencer {
+    events: VecDeque<Box<dyn Any + Send + Sync>>,
+    pending_event: Weak<RwLock<EventBox>>,
+    waker: Option<Waker>,
+}
+
+impl EventSequencer {
+    pub fn new() -> Self {
+        Self {
+            events: VecDeque::new(),
+            pending_event: Weak::new(),
+            waker: None,
+        }
+    }
+    pub fn send_event<EVT: 'static + Send + Sync>(&mut self, event: EVT) {
+        self.events.push_back(Box::new(event));
+        if let Some(waker) = self.waker.take() {
+            waker.wake()
+        }
+    }
+    pub fn poll_next(self: &mut Self, cx: &mut Context<'_>) -> Poll<Option<Arc<EventBox>>> {
+        if let Some(pending_event) = self.pending_event.upgrade() {
+            let mut pending_event = pending_event.write().unwrap();
+            pending_event.waker = Some(cx.waker().clone());
+            return Poll::Pending;
+        }
+        if let Some(event) = self.events.pop_front() {
+            Poll::Ready(Some(Arc::new(EventBox::new(event, cx.waker().clone()))))
+        } else {
+            self.waker = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+impl Stream for EventSequencer {
+    type Item = Arc<EventBox>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Arc<EventBox>>> {
+        self.get_mut().poll_next(cx)
     }
 }
