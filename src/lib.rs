@@ -415,27 +415,37 @@ impl<T: 'static> Tag<T> {
         }
     }
 }
-pub struct EventSequencer {
+struct EventSequencerImpl {
     events: VecDeque<Box<dyn Any + Send + Sync>>,
+    closed: bool,
     pending_event: Weak<RwLock<EventBox>>,
     waker: Option<Waker>,
 }
 
-impl EventSequencer {
-    pub fn new() -> Self {
+impl EventSequencerImpl {
+    fn new() -> Self {
         Self {
             events: VecDeque::new(),
+            closed: false,
             pending_event: Weak::new(),
             waker: None,
         }
     }
-    pub fn send_event<EVT: 'static + Send + Sync>(&mut self, event: EVT) {
-        self.events.push_back(Box::new(event));
+    fn send_blocking_event<EVT: 'static + Send + Sync>(&mut self, event: EVT) {
+        if !self.closed {
+            self.events.push_back(Box::new(event));
+        }
         if let Some(waker) = self.waker.take() {
             waker.wake()
         }
     }
-    pub fn poll_next(self: &mut Self, cx: &mut Context<'_>) -> Poll<Option<Arc<EventBox>>> {
+    fn close(&mut self) {
+        self.closed = true;
+        if let Some(waker) = self.waker.take() {
+            waker.wake()
+        }
+    }
+    fn poll_next(self: &mut Self, cx: &mut Context<'_>) -> Poll<Option<Arc<EventBox>>> {
         if let Some(pending_event) = self.pending_event.upgrade() {
             let mut pending_event = pending_event.write().unwrap();
             pending_event.waker = Some(cx.waker().clone());
@@ -445,15 +455,40 @@ impl EventSequencer {
             Poll::Ready(Some(Arc::new(EventBox::new(event, cx.waker().clone()))))
         } else {
             self.waker = Some(cx.waker().clone());
-            Poll::Pending
+            if self.closed {
+                Poll::Ready(None)
+            } else {
+                Poll::Pending
+            }
         }
+    }
+}
+
+pub struct EventSequencer(Keeper<EventSequencerImpl>);
+
+impl EventSequencer {
+    pub fn new() -> Self {
+        Self(Keeper::new(EventSequencerImpl::new()))
+    }
+    pub fn tag(&self) -> TEventSequencer {
+        TEventSequencer { 0: self.0.tag() }
     }
 }
 
 impl Stream for EventSequencer {
     type Item = Arc<EventBox>;
-
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Arc<EventBox>>> {
-        self.get_mut().poll_next(cx)
+        self.get_mut().0.write(|v| v.poll_next(cx))
+    }
+}
+
+pub struct TEventSequencer(Tag<EventSequencerImpl>);
+
+impl TEventSequencer {
+    pub fn send_blocking_event<EVT: 'static + Send + Sync>(&mut self, event: EVT) -> Option<()> {
+        self.0.write(|v| v.send_blocking_event(event))
+    }
+    pub fn close(&mut self) -> Option<()> {
+        self.0.write(|v| v.close())
     }
 }
