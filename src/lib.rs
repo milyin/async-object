@@ -1,4 +1,7 @@
-use futures::{Future, Stream};
+use futures::{
+    task::{Spawn, SpawnError, SpawnExt},
+    Future, Stream, StreamExt,
+};
 use std::{
     any::{Any, TypeId},
     collections::{HashMap, VecDeque},
@@ -10,7 +13,7 @@ use std::{
 
 struct EventQueue<EVT: Send + Sync> {
     detached: bool,
-    wakker: Option<Waker>,
+    waker: Option<Waker>,
     events: VecDeque<EVT>,
 }
 
@@ -18,7 +21,7 @@ impl<EVT: Send + Sync> EventQueue<EVT> {
     fn new() -> Self {
         Self {
             detached: false,
-            wakker: None,
+            waker: None,
             events: VecDeque::new(),
         }
     }
@@ -27,14 +30,17 @@ impl<EVT: Send + Sync> EventQueue<EVT> {
     }
     fn detach(&mut self) {
         self.detached = true;
-        self.wakker.take().map(|w| w.wake());
+        self.wake();
+    }
+    fn wake(&mut self) {
+        self.waker.take().map(|w| w.wake());
     }
     fn set_waker(&mut self, waker: Waker) {
-        self.wakker = Some(waker)
+        self.waker = Some(waker)
     }
     fn send_event(&mut self, event: EVT) {
         self.events.push_back(event);
-        if let Some(waker) = self.wakker.take() {
+        if let Some(waker) = self.waker.take() {
             waker.wake();
         }
     }
@@ -44,6 +50,7 @@ impl<EVT: Send + Sync> EventQueue<EVT> {
 }
 
 pub struct EventBox {
+    event_id: TypeId,
     event: Box<dyn Any + Send + Sync>,
     waker: Option<Waker>,
 }
@@ -57,46 +64,25 @@ impl Drop for EventBox {
 }
 
 impl EventBox {
-    fn new(event: Box<dyn Any + Send + Sync>, waker: Waker) -> Self {
+    fn new(event_id: TypeId, event: Box<dyn Any + Send + Sync>, waker: Waker) -> Self {
         Self {
+            event_id,
             event,
             waker: Some(waker),
         }
+    }
+    pub fn get_event_id(&self) -> TypeId {
+        self.event_id
     }
     pub fn get_event<EVT: 'static + Send + Sync>(&self) -> Option<&EVT> {
         self.event.downcast_ref()
     }
 }
 
-struct EventBoxQueue {
-    event_queue: EventQueue<Arc<EventBox>>,
-}
+type EventBoxQueue = EventQueue<Arc<EventBox>>;
+type PendingQueue = EventQueue<(TypeId, Box<dyn Any + Send + Sync>)>;
 
-impl EventBoxQueue {
-    fn new() -> Self {
-        Self {
-            event_queue: EventQueue::new(),
-        }
-    }
-    fn is_detached(&self) -> bool {
-        self.event_queue.is_detached()
-    }
-    fn detach(&mut self) {
-        self.event_queue.detach()
-    }
-    fn set_waker(&mut self, waker: Waker) {
-        self.event_queue.set_waker(waker)
-    }
-    fn send_event(&mut self, event: Arc<EventBox>) {
-        self.event_queue.send_event(event)
-    }
-    fn get_event(&mut self) -> Option<Arc<EventBox>> {
-        self.event_queue.get_event()
-    }
-}
-
-type PendingQueue = EventQueue<Box<dyn Any + Send + Sync>>;
-pub struct Keeper<T> {
+struct Keeper<T> {
     subscribers: Arc<RwLock<Subscribers>>,
     pending_queue: Arc<RwLock<PendingQueue>>,
     pending_event: Weak<RwLock<EventBox>>,
@@ -119,7 +105,7 @@ fn drain_wakers(wakers: &Arc<RwLock<Vec<Waker>>>) {
 }
 
 impl<T> Keeper<T> {
-    pub fn new(object: T) -> Self {
+    fn new(object: T) -> Self {
         Self {
             subscribers: Arc::new(RwLock::new(Subscribers::new())),
             pending_queue: Arc::new(RwLock::new(EventQueue::new())),
@@ -128,29 +114,12 @@ impl<T> Keeper<T> {
             object: Arc::new(RwLock::new(object)),
         }
     }
-    pub fn tag(&self) -> Tag<T> {
+    fn tag(&self) -> Tag<T> {
         let object = Arc::downgrade(&self.object);
         let pending_queue = Arc::downgrade(&self.pending_queue);
         let subscribers = Arc::downgrade(&self.subscribers);
         let call_wakers = Arc::downgrade(&self.call_wakers);
         Tag::new(object, pending_queue, subscribers, call_wakers)
-    }
-    pub fn read<V>(&self, f: impl FnOnce(&T) -> V) -> V {
-        let v = f(&self.object.read().unwrap());
-        drain_wakers(&self.call_wakers);
-        v
-    }
-    pub fn write<V>(&mut self, f: impl FnOnce(&mut T) -> V) -> V {
-        let v = f(&mut self.object.write().unwrap());
-        drain_wakers(&self.call_wakers);
-        v
-    }
-    pub fn send_event<EVT: Send + Sync + Clone + 'static>(&mut self, event: EVT) {
-        // self.subscribers.write().unwrap().send_event(event)
-        self.pending_queue
-            .write()
-            .unwrap()
-            .send_event(Box::new(event))
     }
     fn poll_next(self: &mut Self, cx: &mut Context<'_>) -> Poll<Option<Arc<EventBox>>> {
         if let Some(pending_event) = self.pending_event.upgrade() {
@@ -158,14 +127,21 @@ impl<T> Keeper<T> {
             pending_event.waker = Some(cx.waker().clone());
             return Poll::Pending;
         }
-        if let Some(event) = self.pending_queue.write().unwrap().get_event() {
-            Poll::Ready(Some(Arc::new(EventBox::new(event, cx.waker().clone()))))
+        let event = self.pending_queue.write().unwrap().get_event();
+        if let Some((event_id, event)) = event {
+            let waker = cx.waker().clone();
+            Poll::Ready(Some(Arc::new(EventBox::new(event_id, event, waker))))
         } else {
-            self.pending_queue
-                .write()
-                .unwrap()
-                .set_waker(cx.waker().clone());
-            Poll::Pending
+            let weak_count = Arc::weak_count(&self.pending_queue);
+            if weak_count == 0 {
+                Poll::Ready(None)
+            } else {
+                self.pending_queue
+                    .write()
+                    .unwrap()
+                    .set_waker(cx.waker().clone());
+                Poll::Pending
+            }
         }
     }
 }
@@ -183,6 +159,17 @@ impl<T> Stream for Keeper<T> {
     }
 }
 
+pub fn run<T: Send + Sync + 'static>(pool: impl Spawn, object: T) -> Result<Tag<T>, SpawnError> {
+    let mut object = Keeper::new(object);
+    let tag = object.tag();
+    pool.spawn(async move {
+        while let Some(event) = object.next().await {
+            object.subscribers.write().unwrap().send_event(event);
+        }
+    })?;
+    Ok(tag)
+}
+
 struct Subscribers {
     subscribers: HashMap<TypeId, EventSubscribers>,
 }
@@ -193,15 +180,15 @@ impl Subscribers {
             subscribers: HashMap::new(),
         }
     }
-    pub fn subscribe(&mut self, type_id: TypeId, event_queue: Weak<RwLock<EventBoxQueue>>) {
+    pub fn subscribe(&mut self, event_id: TypeId, event_queue: Weak<RwLock<EventBoxQueue>>) {
         let event_subscribers = self
             .subscribers
-            .entry(type_id)
+            .entry(event_id)
             .or_insert(EventSubscribers::new());
         event_subscribers.subscribe(event_queue)
     }
-    pub fn send_event(&mut self, type_id: TypeId, event: Arc<EventBox>) {
-        if let Some(event_subscribers) = self.subscribers.get_mut(&type_id) {
+    pub fn send_event(&mut self, event: Arc<EventBox>) {
+        if let Some(event_subscribers) = self.subscribers.get_mut(&event.get_event_id()) {
             event_subscribers.send_event(event)
         }
     }
@@ -281,7 +268,7 @@ impl<EVT: Send + Sync + 'static> EventStream<EVT> {
     pub fn new<T>(tag: Tag<T>) -> Self {
         let event_queue = Arc::new(RwLock::new(EventBoxQueue::new()));
         let weak_event_queue = Arc::downgrade(&mut (event_queue.clone()));
-        tag.subscribe(TypeId::of::<EVT>(), weak_event_queue);
+        tag.subscribe(TypeId::of::<EVT>().into(), weak_event_queue);
         Self {
             event_queue,
             _phantom: PhantomData,
@@ -432,6 +419,15 @@ impl<T: 'static> PartialEq for Tag<T> {
     }
 }
 
+impl<T> Drop for Tag<T> {
+    fn drop(&mut self) {
+        if let Some(pending_queue) = self.pending_queue.upgrade() {
+            self.pending_queue = Weak::new(); // drop weak reference before waking keeper's poll_next
+            pending_queue.write().unwrap().wake();
+        }
+    }
+}
+
 impl<T: 'static> Tag<T> {
     fn new(
         object: Weak<RwLock<T>>,
@@ -484,102 +480,20 @@ impl<T: 'static> Tag<T> {
             None
         }
     }
-    fn subscribe(&self, type_id: TypeId, event_queue: Weak<RwLock<EventBoxQueue>>) {
+    fn subscribe(&self, event_id: TypeId, event_queue: Weak<RwLock<EventBoxQueue>>) {
         if let Some(subscribers) = self.subscribers.upgrade() {
-            subscribers.write().unwrap().subscribe(type_id, event_queue)
+            subscribers
+                .write()
+                .unwrap()
+                .subscribe(event_id, event_queue)
         }
     }
     pub fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
         if let Some(pending_queue) = self.pending_queue.upgrade() {
-            pending_queue.write().unwrap().send_event(Box::new(event))
+            pending_queue
+                .write()
+                .unwrap()
+                .send_event((TypeId::of::<EVT>(), Box::new(event)))
         }
-        // if let Some(subscribers) = self.subscribers.upgrade() {
-        //     subscribers
-        //         .write()
-        //         .unwrap()
-        //         .send_event(TypeId::of::<EVT>(), event)
-        // }
-    }
-}
-
-// pub async fn process_events<T: 'static>(tag: Tag<T>) {
-//     while let Some(event) = 
-// }
-
-struct EventSequencerImpl {
-    events: VecDeque<Box<dyn Any + Send + Sync>>,
-    closed: bool,
-    pending_event: Weak<RwLock<EventBox>>,
-    waker: Option<Waker>,
-}
-
-impl EventSequencerImpl {
-    fn new() -> Self {
-        Self {
-            events: VecDeque::new(),
-            closed: false,
-            pending_event: Weak::new(),
-            waker: None,
-        }
-    }
-    fn send_blocking_event<EVT: 'static + Send + Sync>(&mut self, event: EVT) {
-        if !self.closed {
-            self.events.push_back(Box::new(event));
-        }
-        if let Some(waker) = self.waker.take() {
-            waker.wake()
-        }
-    }
-    fn close(&mut self) {
-        self.closed = true;
-        if let Some(waker) = self.waker.take() {
-            waker.wake()
-        }
-    }
-    fn poll_next(self: &mut Self, cx: &mut Context<'_>) -> Poll<Option<Arc<EventBox>>> {
-        if let Some(pending_event) = self.pending_event.upgrade() {
-            let mut pending_event = pending_event.write().unwrap();
-            pending_event.waker = Some(cx.waker().clone());
-            return Poll::Pending;
-        }
-        if let Some(event) = self.events.pop_front() {
-            Poll::Ready(Some(Arc::new(EventBox::new(event, cx.waker().clone()))))
-        } else {
-            self.waker = Some(cx.waker().clone());
-            if self.closed {
-                Poll::Ready(None)
-            } else {
-                Poll::Pending
-            }
-        }
-    }
-}
-
-pub struct EventSequencer(Keeper<EventSequencerImpl>);
-
-impl EventSequencer {
-    pub fn new() -> Self {
-        Self(Keeper::new(EventSequencerImpl::new()))
-    }
-    pub fn tag(&self) -> TEventSequencer {
-        TEventSequencer { 0: self.0.tag() }
-    }
-}
-
-impl Stream for EventSequencer {
-    type Item = Arc<EventBox>;
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Arc<EventBox>>> {
-        self.get_mut().0.write(|v| v.poll_next(cx))
-    }
-}
-
-pub struct TEventSequencer(Tag<EventSequencerImpl>);
-
-impl TEventSequencer {
-    pub fn send_blocking_event<EVT: 'static + Send + Sync>(&mut self, event: EVT) -> Option<()> {
-        self.0.write(|v| v.send_blocking_event(event))
-    }
-    pub fn close(&mut self) -> Option<()> {
-        self.0.write(|v| v.close())
     }
 }

@@ -1,9 +1,9 @@
-use async_object::{self, Keeper, Tag};
-use futures::{executor::LocalPool, task::LocalSpawnExt};
-use std::{
-    cell::RefCell,
-    rc::Rc,
+use async_object::{self, run, Tag};
+use futures::{
+    executor::LocalPool,
+    task::{LocalSpawnExt, Spawn},
 };
+use std::{cell::RefCell, rc::Rc};
 
 struct CounterImpl {
     internal_value: usize,
@@ -11,9 +11,7 @@ struct CounterImpl {
 
 impl CounterImpl {
     fn new() -> Self {
-        Self {
-            internal_value: 0,
-        }
+        Self { internal_value: 0 }
     }
     fn inc(&mut self) {
         self.internal_value += 1;
@@ -23,9 +21,12 @@ impl CounterImpl {
     }
 }
 
-struct TCounter(Tag<CounterImpl>);
+struct Counter(Tag<CounterImpl>);
 
-impl TCounter {
+impl Counter {
+    fn new(pool: impl Spawn) -> Self {
+        Counter(run(pool, CounterImpl::new()).unwrap())
+    }
     async fn inc(&self) -> Option<()> {
         self.0
             .async_write(|counter: &mut CounterImpl| counter.inc())
@@ -38,31 +39,18 @@ impl TCounter {
     }
 }
 
-struct Counter(Keeper<CounterImpl>);
-
-impl Counter {
-    fn new() -> Self {
-        let counter = CounterImpl::new();
-        Self(Keeper::new(counter))
-    }
-    fn tag(&self) -> TCounter {
-        TCounter(self.0.tag())
-    }
-}
-
 #[test]
 fn test_handle_call() {
+    let mut pool = LocalPool::new();
     let test_value = Rc::new(RefCell::new(None));
     let test_value_r = test_value.clone();
 
-    let counter = Counter::new();
-    let tcounter = counter.tag();
+    let counter = Counter::new(pool.spawner());
 
     let future = async move {
-        let v = tcounter.internal_value().await.unwrap();
+        let v = counter.internal_value().await.unwrap();
         *(test_value.borrow_mut()) = Some(v);
     };
-    let mut pool = LocalPool::new();
     pool.spawner().spawn_local(future).unwrap();
     pool.run_until_stalled();
     assert!(test_value_r.borrow().is_some())
@@ -70,18 +58,17 @@ fn test_handle_call() {
 
 #[test]
 fn test_handle_call_mut() {
+    let mut pool = LocalPool::new();
     let test_value = Rc::new(RefCell::new(None));
     let test_value_r = test_value.clone();
 
-    let counter = Counter::new();
-    let tcounter = counter.tag();
+    let counter = Counter::new(pool.spawner());
 
     let future = async move {
-        tcounter.inc().await.unwrap();
-        let v = tcounter.internal_value().await.unwrap();
+        counter.inc().await.unwrap();
+        let v = counter.internal_value().await.unwrap();
         *(test_value.borrow_mut()) = Some(v);
     };
-    let mut pool = LocalPool::new();
     pool.spawner().spawn_local(future).unwrap();
     pool.run_until_stalled();
     assert!(test_value_r.borrow().is_some());
