@@ -174,14 +174,14 @@ fn fizz_buzz_threadpool_async_call() {
     assert!(sink.validate().unwrap());
 }
 
-// #[test]
-// fn fizz_buzz_locapool_sync_call() {
-//     let mut pool = LocalPool::new();
-//     let spawner = pool.spawner();
-//     let sink = Sink::new();
-//     spawner
-//         .spawn_local(fizz_buzz_test(spawner.clone(), sink.tag()))
-//         .unwrap();
-//     pool.run();
-//     assert!(sink.validate());
-// }
+#[test]
+fn fizz_buzz_locapool_sync_call() {
+    let mut pool = LocalPool::new();
+    let spawner = pool.spawner();
+    let sink = Sink::new(spawner.clone());
+    spawner
+        .spawn_local(fizz_buzz_test(spawner.clone(), sink.clone()))
+        .unwrap();
+    pool.run_until_stalled();
+    assert!(sink.validate().unwrap());
+}
