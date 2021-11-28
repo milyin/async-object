@@ -1,6 +1,2 @@
 # async-object
-This library allows to avoid borrow checker restrictions by accessing objects by handles and interacting between them using message passing.
-
-Library provides a pair of wrappers for normal Rust structure S: Handle\<S\> and Keeper\<S\>. Keeper takes ownership of structure. Handle provides methods for accessing the structure in async context with option to fail when structure is destroyed.
-
-Additionally handle provides methods for broadcasting and subcribing to custom events. Events are broadcasted through asyncronous streams.
+This library provides framework for intraction of multiple objects in asynchronous environment wihout strict borrow-checker imposed lifetime restictions. Each object is holded by it's own asynchronous event loop and accessed by clonable wrapper **Tag\<S\>**. Objects can call each other methods and send/receive events.
