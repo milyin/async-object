@@ -26,6 +26,12 @@ impl<T: 'static> CArc<T> {
             call_wakers: Arc::new(RwLock::new(Vec::new())),
         }
     }
+    pub fn downgrade(&self) -> WCArc<T> {
+        WCArc {
+            object: Arc::downgrade(&self.object),
+            call_wakers: Arc::downgrade(&self.call_wakers),
+        }
+    }
 }
 
 impl<T: 'static> Clone for CArc<T> {
