@@ -1,6 +1,6 @@
 use std::sync::mpsc::channel;
 
-use async_object::{run, EventStream, Tag};
+use async_object::{CArc, EArc, EventStream};
 use futures::{
     executor::{LocalPool, ThreadPool},
     join,
@@ -47,6 +47,7 @@ impl SinkImpl {
                     (false, false) => FizzBuzz::Number,
                 };
                 if *res != expected {
+                    dbg!(n, *res);
                     return false;
                 }
             }
@@ -56,27 +57,27 @@ impl SinkImpl {
 }
 
 #[derive(Clone)]
-struct Sink(Tag<SinkImpl>);
+struct Sink(CArc<SinkImpl>);
 
 impl Sink {
-    pub fn new(pool: impl Spawn) -> Self {
-        Sink(run(pool, SinkImpl::new()).unwrap())
+    pub fn new() -> Self {
+        Sink(CArc::new(SinkImpl::new()))
     }
-    async fn set_value(&self, pos: usize, value: FizzBuzz) -> Option<()> {
-        self.0.async_write(|sink| sink.set_value(pos, value)).await
+    async fn set_value(&self, pos: usize, value: FizzBuzz) -> () {
+        self.0
+            .async_call_mut(|sink| sink.set_value(pos, value))
+            .await
     }
-    pub fn validate(&self) -> Option<bool> {
-        self.0.read(|sink| sink.validate())
+    pub fn validate(&self) -> bool {
+        self.0.call(|sink| sink.validate())
     }
 }
 
-struct GeneratorImpl;
-
 #[derive(Clone)]
-struct Generator(Tag<GeneratorImpl>);
+struct Generator(EArc);
 impl Generator {
     pub fn new(pool: impl Spawn) -> Self {
-        Generator(run(pool, GeneratorImpl).unwrap())
+        Generator(EArc::new(pool).unwrap())
     }
     fn values(&self) -> EventStream<usize> {
         EventStream::new(self.0.clone())
@@ -93,7 +94,8 @@ async fn fizz_buzz_test(pool: impl Spawn + Clone, sink: Sink) {
         let mut values = generator.values();
         pool.spawn_with_handle(async move {
             while let Some(n) = values.next().await {
-                sink.set_value(*n.as_ref(), FizzBuzz::Number).await.unwrap();
+                let n = *n.as_ref();
+                sink.set_value(n, FizzBuzz::Number).await
             }
         })
         .unwrap()
@@ -105,7 +107,7 @@ async fn fizz_buzz_test(pool: impl Spawn + Clone, sink: Sink) {
             while let Some(n) = values.next().await {
                 let n = *n.as_ref();
                 if n % 3 == 0 {
-                    sink.set_value(n, FizzBuzz::Fizz).await.unwrap();
+                    sink.set_value(n, FizzBuzz::Fizz).await
                 }
             }
         })
@@ -118,7 +120,7 @@ async fn fizz_buzz_test(pool: impl Spawn + Clone, sink: Sink) {
             while let Some(n) = values.next().await {
                 let n = *n.as_ref();
                 if n % 5 == 0 {
-                    tsink.set_value(n, FizzBuzz::Buzz).await.unwrap();
+                    tsink.set_value(n, FizzBuzz::Buzz).await
                 }
             }
         })
@@ -131,7 +133,7 @@ async fn fizz_buzz_test(pool: impl Spawn + Clone, sink: Sink) {
             while let Some(n) = values.next().await {
                 let n = *n.as_ref();
                 if n % 5 == 0 && n % 3 == 0 {
-                    tsink.set_value(n, FizzBuzz::FizzBuzz).await.unwrap();
+                    tsink.set_value(n, FizzBuzz::FizzBuzz).await
                 }
             }
         })
@@ -142,7 +144,7 @@ async fn fizz_buzz_test(pool: impl Spawn + Clone, sink: Sink) {
         let sink = sink.clone();
         async move {
             for n in 1..100 {
-                sink.set_value(n, FizzBuzz::Expected).await.unwrap();
+                sink.set_value(n, FizzBuzz::Expected).await;
                 generator.send_value(n);
             }
         }
@@ -162,7 +164,7 @@ fn fizz_buzz_threadpool_async_call() {
         .create()
         .unwrap();
 
-    let sink = Sink::new(pool.clone());
+    let sink = Sink::new();
     let handle = fizz_buzz_test(pool.clone(), sink.clone());
 
     let (tx, rx) = channel();
@@ -171,17 +173,17 @@ fn fizz_buzz_threadpool_async_call() {
         tx.send(()).unwrap();
     });
     let _ = rx.recv().unwrap();
-    assert!(sink.validate().unwrap());
+    assert!(sink.validate());
 }
 
 #[test]
 fn fizz_buzz_locapool_sync_call() {
     let mut pool = LocalPool::new();
     let spawner = pool.spawner();
-    let sink = Sink::new(spawner.clone());
+    let sink = Sink::new();
     spawner
         .spawn_local(fizz_buzz_test(spawner.clone(), sink.clone()))
         .unwrap();
-    pool.run_until_stalled();
-    assert!(sink.validate().unwrap());
+    pool.run();
+    assert!(sink.validate());
 }
