@@ -1,8 +1,5 @@
-use async_object::{self, run, Tag};
-use futures::{
-    executor::LocalPool,
-    task::{LocalSpawnExt, Spawn},
-};
+use async_object::CArc;
+use futures::{executor::LocalPool, task::LocalSpawnExt};
 use std::{cell::RefCell, rc::Rc};
 
 struct CounterImpl {
@@ -21,20 +18,20 @@ impl CounterImpl {
     }
 }
 
-struct Counter(Tag<CounterImpl>);
+struct Counter(CArc<CounterImpl>);
 
 impl Counter {
-    fn new(pool: impl Spawn) -> Self {
-        Counter(run(pool, CounterImpl::new()).unwrap())
+    fn new() -> Self {
+        Counter(CArc::new(CounterImpl::new()))
     }
-    async fn inc(&self) -> Option<()> {
+    async fn inc(&self) {
         self.0
-            .async_write(|counter: &mut CounterImpl| counter.inc())
+            .async_call_mut(|counter: &mut CounterImpl| counter.inc())
             .await
     }
-    async fn internal_value(&self) -> Option<usize> {
+    async fn internal_value(&self) -> usize {
         self.0
-            .async_read(|counter: &CounterImpl| counter.internal_value())
+            .async_call(|counter: &CounterImpl| counter.internal_value())
             .await
     }
 }
@@ -45,10 +42,10 @@ fn test_handle_call() {
     let test_value = Rc::new(RefCell::new(None));
     let test_value_r = test_value.clone();
 
-    let counter = Counter::new(pool.spawner());
+    let counter = Counter::new();
 
     let future = async move {
-        let v = counter.internal_value().await.unwrap();
+        let v = counter.internal_value().await;
         *(test_value.borrow_mut()) = Some(v);
     };
     pool.spawner().spawn_local(future).unwrap();
@@ -62,11 +59,11 @@ fn test_handle_call_mut() {
     let test_value = Rc::new(RefCell::new(None));
     let test_value_r = test_value.clone();
 
-    let counter = Counter::new(pool.spawner());
+    let counter = Counter::new();
 
     let future = async move {
-        counter.inc().await.unwrap();
-        let v = counter.internal_value().await.unwrap();
+        counter.inc().await;
+        let v = counter.internal_value().await;
         *(test_value.borrow_mut()) = Some(v);
     };
     pool.spawner().spawn_local(future).unwrap();
