@@ -1,10 +1,12 @@
-use async_object;
-use async_object_derive::AsyncObject;
+use async_object_derive::async_object;
 
-#[derive(AsyncObject)]
+#[async_object(Test)]
 struct TestImpl {
     foo: usize,
 }
 
 #[test]
-fn derive_test() {}
+fn derive_test() {
+    let _ = TestImpl { foo: 0 };
+    let _ = Test;
+}

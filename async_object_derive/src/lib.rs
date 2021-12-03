@@ -1,29 +1,34 @@
 extern crate proc_macro;
 
-use proc_macro::TokenStream;
+use core::iter::Extend;
 use quote::quote;
-use syn;
+use std::iter::once;
+use syn::{self, parse_macro_input};
 
 enum ObjectMacroTitle {
     AsyncObject(String),
     AsyncObjectEvents(String),
 }
 
+fn append(
+    item: proc_macro::TokenStream,
+    quote: proc_macro2::TokenStream,
+) -> proc_macro::TokenStream {
+    let mut result = proc_macro2::TokenStream::from(item);
+    result.extend(once(quote));
+    result.into()
+}
+
 #[proc_macro_attribute]
-pub fn async_object_macro_derive(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr = syn::parse(attr).unwrap();
-    let item = syn::parse(item).unwrap();
-
-    let title = parse_async_object_macro_title(&attr);
-
-    impl_async_object_macro(title, &item)
-}
-
-fn parse_async_object_macro_title(ast: &syn::DeriveInput) -> ObjectMacroTitle {
-    ObjectMacroTitle::AsyncObject("".to_string())
-}
-
-fn impl_async_object_macro(title: ObjectMacroTitle, ast: &syn::DeriveInput) -> TokenStream {
-    let gen = quote! {};
-    gen.into()
+pub fn async_object(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let ident: syn::Ident = parse_macro_input!(attr);
+    append(
+        item,
+        quote! {
+            struct #ident;
+        },
+    )
 }
