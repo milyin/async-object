@@ -1,14 +1,26 @@
-use async_object_derive::async_object;
+use async_object_derive::{async_object_decl, async_object_impl};
 
-#[async_object(Test)]
+#[async_object_decl(Test, WTest)]
 struct TestImpl {}
-#[async_object(pub Test2)]
+#[async_object_decl(pub Test2, pub WTest2)]
 struct Test2Impl {}
+
+#[async_object_impl(Test, WTest)]
+impl TestImpl {
+    fn test(&self, foo: usize) -> bool {
+        true
+    }
+    fn test_mut(&mut self, foo: usize) -> bool {
+        true
+    }
+}
 
 #[test]
 fn derive_test() {
     let test = TestImpl {};
-    let _ = Test::create(test);
+    let mut test = Test::create(test);
     let test2 = Test2Impl {};
-    let _ = Test2::create(test2);
+    let test2 = Test2::create(test2);
+    test.test(42);
+    test.test_mut(42);
 }
