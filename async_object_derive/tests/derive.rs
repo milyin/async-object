@@ -1,8 +1,9 @@
-use async_object_derive::{async_object_decl, async_object_impl};
+use async_object_derive::{async_object_decl, async_object_impl, async_object_with_events_decl};
+use futures::executor::ThreadPool;
 
 #[async_object_decl(Test, WTest)]
 struct TestImpl {}
-#[async_object_decl(pub Test2, pub WTest2)]
+#[async_object_with_events_decl(pub Test2, pub WTest2)]
 struct Test2Impl {}
 
 #[async_object_impl(Test, WTest)]
@@ -17,10 +18,11 @@ impl TestImpl {
 
 #[test]
 fn derive_test() {
+    let pool = ThreadPool::new().unwrap();
     let test = TestImpl {};
     let mut test = Test::create(test);
     let test2 = Test2Impl {};
-    let test2 = Test2::create(test2);
+    let test2 = Test2::create(test2, pool);
     test.test(42);
     test.test_mut(42);
 }

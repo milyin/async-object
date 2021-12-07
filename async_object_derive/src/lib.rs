@@ -102,6 +102,64 @@ pub fn async_object_decl(
     append(item, quote)
 }
 
+#[proc_macro_attribute]
+pub fn async_object_with_events_decl(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let attr: AsyncObjectDeclAttr = parse_macro_input!(attr);
+    let derive_input = item.clone();
+    let derive_input: DeriveInput = parse_macro_input!(derive_input);
+    let carc_vis = attr.carc.vis;
+    let carc_ident = attr.carc.ident;
+    let wcarc_vis = attr.wcarc.vis;
+    let wcarc_ident = attr.wcarc.ident;
+    let object_ident = derive_input.ident;
+    let object_vis = derive_input.vis;
+    let quote = quote! {
+       #carc_vis struct #carc_ident {
+           carc: async_object::CArc<#object_ident>,
+           earc: async_object::EArc
+       }
+       impl #carc_ident {
+           #object_vis fn create(object: #object_ident, pool: impl futures::task::Spawn) -> Result<Self,futures::task::SpawnError> {
+               Ok(Self {
+                   carc: async_object::CArc::new(object),
+                   earc: async_object::EArc::new(pool)?
+               })
+           }
+           #wcarc_vis fn downgrade(&self) -> #wcarc_ident {
+               #wcarc_ident {
+                   wcarc: self.carc.downgrade(),
+                   wearc: self.earc.downgrade()
+               }
+           }
+           fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
+                self.earc.send_event(event)
+           }
+           fn create_event_stream<EVT: Send + Sync + 'static>(&self) -> async_object::EventStream<EVT> {
+               async_object::EventStream::new(&self.earc)
+           }
+       }
+       #wcarc_vis struct #wcarc_ident {
+           wcarc: async_object::WCArc<#object_ident>,
+           wearc: async_object::WEArc
+       }
+       impl #wcarc_ident {
+           #carc_vis fn upgrade(&self) -> Option<#carc_ident> {
+               if let (Some(carc), Some(earc)) = (self.wcarc.upgrade(), self.wearc.upgrade()) {
+                   Some(#carc_ident {
+                       carc, earc
+                   })
+               } else {
+                   None
+                }
+           }
+       }
+    };
+    append(item, quote)
+}
+
 struct AsyncObjectImplAttr {
     carc: Ident,
     wcarc: Ident,

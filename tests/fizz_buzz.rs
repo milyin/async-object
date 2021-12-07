@@ -80,7 +80,7 @@ impl Generator {
         Generator(EArc::new(pool).unwrap())
     }
     fn values(&self) -> EventStream<usize> {
-        EventStream::new(self.0.clone())
+        EventStream::new(&self.0)
     }
     fn send_value(&mut self, value: usize) {
         self.0.send_event(value)

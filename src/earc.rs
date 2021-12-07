@@ -338,7 +338,7 @@ impl Stream for SEArc {
 }
 
 impl<EVT: Send + Sync + 'static> EventStream<EVT> {
-    pub fn new(earc: EArc) -> Self {
+    pub fn new(earc: &EArc) -> Self {
         let event_queue = Arc::new(RwLock::new(EventBoxQueue::new()));
         let weak_event_queue = Arc::downgrade(&mut (event_queue.clone()));
         earc.subscribe(TypeId::of::<EVT>().into(), weak_event_queue);
