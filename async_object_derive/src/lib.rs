@@ -91,6 +91,11 @@ pub fn async_object_decl(
                 }
             }
         }
+        impl PartialEq for #carc_ident {
+            fn eq(&self, other: &Self) -> bool {
+                self.carc == other.carc
+            }
+        }
         #wcarc_vis struct #wcarc_ident {
             wcarc: async_object::WCArc<#object_ident>
         }
@@ -161,6 +166,11 @@ pub fn async_object_with_events_decl(
                     carc: self.carc.clone(),
                     earc: self.earc.clone()
                 }
+            }
+        }
+        impl PartialEq for #carc_ident {
+            fn eq(&self, other: &Self) -> bool {
+                self.carc == other.carc
             }
         }
         #wcarc_vis struct #wcarc_ident {

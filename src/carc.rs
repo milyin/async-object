@@ -52,6 +52,18 @@ impl<T: 'static> Clone for WCArc<T> {
     }
 }
 
+impl<T: 'static> PartialEq for CArc<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.object, &other.object)
+    }
+}
+
+impl<T: 'static> PartialEq for WCArc<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.object.ptr_eq(&other.object)
+    }
+}
+
 impl<T: 'static> CArc<T> {
     fn add_call_waker(&self, waker: Waker) {
         self.call_wakers.write().unwrap().push(waker);
