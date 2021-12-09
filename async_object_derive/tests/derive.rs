@@ -15,7 +15,7 @@ impl TestImpl {
 
 #[async_object_impl(Test, WTest)]
 impl TestImpl {
-    fn test(&self) -> usize {
+    pub fn test(&self) -> usize {
         self.foo
     }
     fn test_mut(&mut self, foo: usize) {

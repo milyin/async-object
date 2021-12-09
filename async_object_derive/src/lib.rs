@@ -241,6 +241,7 @@ pub fn async_object_impl(
     let mut wcarc_methods = Vec::new();
     for item in item_impl.items {
         if let ImplItem::Method(method) = item {
+            let vis = method.vis;
             let signature = method.sig;
             if signature.asyncness.is_none() {
                 if let Some(FnArg::Receiver(first_param)) = signature.inputs.first() {
@@ -266,19 +267,19 @@ pub fn async_object_impl(
                     };
                     let methods = if let Some(_) = first_param.mutability {
                         quote! {
-                            #signature {
+                            #vis #signature {
                                 self.carc.call_mut(|v| v.#method_name(#(#param_names),*) )
                             }
-                            #async_signature {
+                            #vis #async_signature {
                                 self.carc.async_call_mut(|v| v.#method_name(#(#param_names),*) ).await
                             }
                         }
                     } else {
                         quote! {
-                            #signature {
+                            #vis #signature {
                                 self.carc.call(|v| v.#method_name(#(#param_names),*) )
                             }
-                            #async_signature {
+                            #vis #async_signature {
                                 self.carc.async_call(|v| v.#method_name(#(#param_names),*) ).await
                             }
                         }
