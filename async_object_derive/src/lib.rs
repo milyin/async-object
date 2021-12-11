@@ -2,7 +2,7 @@ extern crate proc_macro;
 
 use core::iter::Extend;
 use quote::quote;
-use std::iter::once;
+use std::{iter::once, mem::swap};
 use syn::{
     self,
     parse::Parse,
@@ -215,26 +215,98 @@ impl Parse for AsyncObjectImplAttr {
     }
 }
 
-fn option_of(param: Box<Type>) -> Box<Type> {
+fn wrap_to_option(mut param: Box<Type>) -> (Box<Type>, bool) {
+    let result_arg = if let Type::Path(ref mut param) = *param {
+        if let Some(param) = param.path.segments.last_mut() {
+            if param.ident == "Result" {
+                if let PathArguments::AngleBracketed(ref mut args) = param.arguments {
+                    if let Some(result_arg) = args.args.first_mut() {
+                        Some(result_arg)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let option_ident = Ident::new("Option", proc_macro2::Span::call_site());
     let mut segments = Punctuated::new();
-    let ident = Ident::new("Option", proc_macro2::Span::call_site());
-    let mut args = Punctuated::new();
-    let generic_argument = GenericArgument::Type(*param);
-    args.push_value(generic_argument);
-    let arguments = PathArguments::AngleBracketed(AngleBracketedGenericArguments {
-        colon2_token: None,
-        lt_token: Lt::default(),
-        args: args,
-        gt_token: Gt::default(),
-    });
-    segments.push_value(PathSegment { ident, arguments });
-    Box::new(Type::Path(TypePath {
-        qself: None,
-        path: Path {
-            leading_colon: None,
-            segments,
-        },
-    }))
+    if let Some(result_arg) = result_arg {
+        // *param == Result<RET_TYPE, ...>
+        // goal is to wrap RET_TYPE to Option, not whole Result:
+        // *param == Result<Option<RET_TYPE>. ...>
+        let option_arguments = PathArguments::AngleBracketed(AngleBracketedGenericArguments {
+            colon2_token: None,
+            lt_token: Lt::default(),
+            args: Punctuated::new(),
+            gt_token: Gt::default(),
+        });
+        segments.push_value(PathSegment {
+            ident: option_ident,
+            arguments: option_arguments,
+        });
+        let mut arg = GenericArgument::Type(Type::Path(TypePath {
+            qself: None,
+            path: Path {
+                leading_colon: None,
+                segments,
+            },
+        }));
+        // Before swap:
+        // *param == Result<&mut result_arg = RET_TYPE, ...>
+        // arg == Option<>
+        swap(result_arg, &mut arg);
+        // After swap:
+        // *param == Result<&mut result_arg = Option<>,...>
+        // arg == RET_TYPE
+
+        // Then insert RET_TYPE to Option<>:
+        // after this
+        // *param == Result<Option<RET_TYPE>, ...>
+        if let GenericArgument::Type(ref mut v) = result_arg {
+            if let Type::Path(ref mut v) = v {
+                if let Some(v) = v.path.segments.first_mut() {
+                    if let PathArguments::AngleBracketed(ref mut v) = v.arguments {
+                        v.args.push(arg)
+                    }
+                }
+            }
+        }
+
+        // result_args.push_value(option);
+        (Box::new(*param), true)
+    } else {
+        // Just wrap return value to Option
+        let option_generic_argument = GenericArgument::Type(*param);
+        let mut args = Punctuated::new();
+        args.push_value(option_generic_argument);
+        let option_arguments = PathArguments::AngleBracketed(AngleBracketedGenericArguments {
+            colon2_token: None,
+            lt_token: Lt::default(),
+            args,
+            gt_token: Gt::default(),
+        });
+        segments.push_value(PathSegment {
+            ident: option_ident,
+            arguments: option_arguments,
+        });
+        let option = Type::Path(TypePath {
+            qself: None,
+            path: Path {
+                leading_colon: None,
+                segments,
+            },
+        });
+        (Box::new(option), false)
+    }
 }
 
 #[proc_macro_attribute]
@@ -296,17 +368,28 @@ pub fn async_object_impl(
                     };
                     carc_methods.push(methods);
 
-                    let output = ReturnType::Type(
-                        RArrow::default(),
-                        option_of(if let ReturnType::Type(_, ref outtype) = signature.output {
+                    let (result, transpose) = wrap_to_option(
+                        if let ReturnType::Type(_, ref outtype) = signature.output {
                             outtype.clone()
                         } else {
                             Box::new(Type::Tuple(TypeTuple {
                                 paren_token: Paren::default(),
                                 elems: Punctuated::default(),
                             }))
-                        }),
+                        },
                     );
+                    let transpose_call = if transpose {
+                        quote! { . transpose() }
+                    } else {
+                        quote! {}
+                    };
+                    let none_result = if transpose {
+                        quote! { Ok(None) }
+                    } else {
+                        quote! { None }
+                    };
+
+                    let output = ReturnType::Type(RArrow::default(), result);
 
                     let signature = Signature {
                         output: output.clone(),
@@ -320,35 +403,35 @@ pub fn async_object_impl(
                     };
                     let methods = if let Some(_) = first_param.mutability {
                         quote! {
-                            #signature {
+                            #vis #signature {
                                 if let Some(v) = self.wcarc.upgrade() {
-                                    Some(v.call_mut(|v| v.#method_name(#(#param_names),*) ))
+                                    Some(v.call_mut(|v| v.#method_name(#(#param_names),*) )) #transpose_call
                                 } else {
-                                    None
+                                    #none_result
                                 }
                             }
-                            #async_signature {
+                            #vis #async_signature {
                                 if let Some(v) = self.wcarc.upgrade() {
-                                    Some(v.async_call_mut(|v| v.#method_name(#(#param_names),*) ).await)
+                                    Some(v.async_call_mut(|v| v.#method_name(#(#param_names),*) ).await) #transpose_call
                                 } else {
-                                    None
+                                    #none_result
                                 }
                             }
                         }
                     } else {
                         quote! {
-                            #signature {
+                            #vis #signature {
                                 if let Some(v) = self.wcarc.upgrade() {
-                                    Some(v.call(|v| v.#method_name(#(#param_names),*) ))
+                                    Some(v.call(|v| v.#method_name(#(#param_names),*) )) #transpose_call
                                 } else {
-                                    None
+                                    #none_result
                                 }
                             }
-                            #async_signature {
+                            #vis #async_signature {
                                 if let Some(v) = self.wcarc.upgrade() {
-                                    Some(v.async_call(|v| v.#method_name(#(#param_names),*) ).await)
+                                    Some(v.async_call(|v| v.#method_name(#(#param_names),*) ).await) #transpose_call
                                 } else {
-                                    None
+                                    #none_result
                                 }
                             }
                         }

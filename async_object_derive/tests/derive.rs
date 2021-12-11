@@ -15,8 +15,8 @@ impl TestImpl {
 
 #[async_object_impl(Test, WTest)]
 impl TestImpl {
-    pub fn test(&self) -> usize {
-        self.foo
+    pub fn test(&self) -> Result<usize, ()> {
+        Ok(self.foo)
     }
     fn test_mut(&mut self, foo: usize) {
         self.foo = foo;
@@ -28,10 +28,10 @@ fn async_object_decl_test() {
     let mut test = Test::create(TestImpl::new());
     let mut wtest = test.downgrade();
     test.test_mut(42);
-    assert!(test.test() == 42);
+    assert!(test.test() == Ok(42));
     assert!(wtest.upgrade().is_some());
     assert!(wtest.test_mut(43) == Some(()));
-    assert!(wtest.test().unwrap() == 43);
+    assert!(wtest.test() == Ok(Some(43)));
 }
 
 #[async_object_with_events_decl(pub Test2, pub WTest2)]
@@ -64,7 +64,7 @@ fn async_object_with_events_decl_test() {
     assert!(test.test() == 42);
     assert!(wtest.upgrade().is_some());
     assert!(wtest.test_mut(43) == Some(()));
-    assert!(wtest.test().unwrap() == 43);
+    assert!(wtest.test() == Some(43));
     pool.spawner()
         .spawn({
             let mut test = test.clone();
