@@ -36,9 +36,9 @@ struct SEArc {
 }
 
 /// Container for event. The main purpose of this container is to ensure correct order of events.
-/// All events to be broadcasted to subscribers by ['EArc'] object are placed to queue first and broadcased wrapped to Arc<Event>.
-/// No next event is broadcasted until previous Event is dropped. So new event is sent to subscribers only when all subscribers
-/// confirms that they finished processing of previous event (by dropping their copy of Arc<EventBox>)
+/// All events to be broadcasted to subscribers by ['EArc'] object are placed to queue first and broadcased wrapped to clonable
+/// Event. Next event is not broadcasted until all copies of previous Event is dropped. So new event is sent to subscribers
+/// only when all subscribers confirms that they finished processing of previous event (by dropping their copy of Event)
 pub struct Event<EVT: 'static + Send + Sync> {
     event_box: Arc<EventBox>,
     _phantom: PhantomData<EVT>,
@@ -204,6 +204,15 @@ impl<EVT: 'static + Send + Sync> Event<EVT> {
 impl<EVT: 'static + Send + Sync> AsRef<EVT> for Event<EVT> {
     fn as_ref(&self) -> &EVT {
         &self.event_box.get_event().unwrap()
+    }
+}
+
+impl<EVT: 'static + Send + Sync> Clone for Event<EVT> {
+    fn clone(&self) -> Self {
+        Self {
+            event_box: self.event_box.clone(),
+            _phantom: PhantomData,
+        }
     }
 }
 
