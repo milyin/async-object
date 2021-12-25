@@ -72,19 +72,19 @@ impl SinkImpl {
 struct GeneratorImpl;
 
 impl Generator {
-    pub fn new(pool: impl Spawn) -> Self {
-        Generator::create(GeneratorImpl, pool).unwrap()
+    pub fn new() -> Self {
+        Generator::create(GeneratorImpl).unwrap()
     }
     fn values(&self) -> EventStream<usize> {
         self.create_event_stream()
     }
-    fn send_value(&mut self, value: usize) {
-        self.send_event(value)
+    async fn send_value(&mut self, value: usize) {
+        self.send_event(value).await
     }
 }
 
 async fn fizz_buzz_test(pool: impl Spawn + Clone, sink: Sink) {
-    let mut generator = Generator::new(pool.clone());
+    let mut generator = Generator::new();
     let task_nums = {
         let mut sink = sink.clone();
         let mut values = generator.values();
@@ -141,7 +141,7 @@ async fn fizz_buzz_test(pool: impl Spawn + Clone, sink: Sink) {
         async move {
             for n in 1..100 {
                 sink.async_set_value(n, FizzBuzz::Expected).await;
-                generator.send_value(n);
+                generator.send_value(n).await;
             }
         }
     })

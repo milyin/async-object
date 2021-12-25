@@ -141,10 +141,10 @@ pub fn async_object_with_events_decl(
             earc: async_object::EArc
         }
         impl #carc_ident {
-            #object_vis fn create(object: #object_ident, pool: impl futures::task::Spawn) -> Result<Self,futures::task::SpawnError> {
+            #object_vis fn create(object: #object_ident) -> Result<Self,futures::task::SpawnError> {
                 Ok(Self {
                     carc: async_object::CArc::new(object),
-                    earc: async_object::EArc::new(pool)?
+                    earc: async_object::EArc::new()?
                 })
             }
             #wcarc_vis fn downgrade(&self) -> #wcarc_ident {
@@ -153,8 +153,8 @@ pub fn async_object_with_events_decl(
                     wearc: self.earc.downgrade()
                 }
             }
-            fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
-                self.earc.send_event(event)
+            async fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
+                self.earc.send_event(event).await
             }
             fn create_event_stream<EVT: Send + Sync + 'static>(&self) -> async_object::EventStream<EVT> {
                 async_object::EventStream::new(&self.earc)

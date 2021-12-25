@@ -58,13 +58,23 @@ impl Test2Impl {
 #[test]
 fn async_object_with_events_decl_test() {
     let mut pool = LocalPool::new();
-    let mut test = Test2::create(Test2Impl::new(), pool.spawner()).unwrap();
+    let mut test = Test2::create(Test2Impl::new()).unwrap();
     let mut wtest = test.downgrade();
     test.test_mut(42);
     assert!(test.test() == 42);
     assert!(wtest.upgrade().is_some());
     assert!(wtest.test_mut(43) == Some(()));
     assert!(wtest.test() == Some(43));
+
+    pool.spawner()
+        .spawn({
+            let test = test.clone();
+            async move {
+                test.send_event(44usize).await;
+            }
+        })
+        .unwrap();
+
     pool.spawner()
         .spawn({
             let mut test = test.clone();
@@ -76,7 +86,7 @@ fn async_object_with_events_decl_test() {
             }
         })
         .unwrap();
-    test.send_event(44usize);
     pool.run_until_stalled();
+    dbg!(test.test());
     assert!(test.test() == 45);
 }

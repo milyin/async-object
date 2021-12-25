@@ -7,38 +7,23 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use futures::{
-    task::{Spawn, SpawnError, SpawnExt},
-    Stream, StreamExt,
-};
+use futures::{task::SpawnError, Future, Stream};
 
 /// Reference-counting object based on Arc<RwLock<...>> with methods for broadcasting events
 #[derive(Clone)]
 pub struct EArc {
-    waker: Arc<RwLock<Option<Waker>>>,
-    subscribers: Weak<RwLock<Subscribers>>,
-    pending_queue: Weak<RwLock<PendingQueue>>,
+    subscribers: Arc<RwLock<Subscribers>>,
 }
 
 /// Non-owning reference to EArc
 #[derive(Clone)]
 pub struct WEArc {
-    waker: Weak<RwLock<Option<Waker>>>,
     subscribers: Weak<RwLock<Subscribers>>,
-    pending_queue: Weak<RwLock<PendingQueue>>,
-}
-
-struct SEArc {
-    waker: Weak<RwLock<Option<Waker>>>,
-    subscribers: Arc<RwLock<Subscribers>>,
-    pending_queue: Arc<RwLock<PendingQueue>>,
-    pending_event: Weak<EventBox>,
 }
 
 /// Container for event. The main purpose of this container is to ensure correct order of events.
-/// All events to be broadcasted to subscribers by ['EArc'] object are placed to queue first and broadcased wrapped to clonable
-/// Event. Next event is not broadcasted until all copies of previous Event is dropped. So new event is sent to subscribers
-/// only when all subscribers confirms that they finished processing of previous event (by dropping their copy of Event)
+/// Asyncronous send_event function finishes only when all copies of Event are destroyed. This allows to guarantee
+/// that sent event was processed by all handlers at the moment when send_event returned
 pub struct Event<EVT: 'static + Send + Sync> {
     event_box: Arc<EventBox>,
     _phantom: PhantomData<EVT>,
@@ -58,7 +43,6 @@ struct EventBox {
 }
 
 type EventBoxQueue = EventQueue<Arc<EventBox>>;
-type PendingQueue = EventQueue<(TypeId, Box<dyn Any + Send + Sync>)>;
 
 struct EventQueue<EVT: Send + Sync> {
     detached: bool,
@@ -83,11 +67,11 @@ impl Drop for EventBox {
 }
 
 impl EventBox {
-    fn new(event_id: TypeId, event: Box<dyn Any + Send + Sync>, waker: Waker) -> Self {
+    fn new(event_id: TypeId, event: Box<dyn Any + Send + Sync>) -> Self {
         Self {
             event_id,
             event,
-            waker: RwLock::new(Some(waker)),
+            waker: RwLock::new(None),
         }
     }
     pub fn get_event_id(&self) -> TypeId {
@@ -216,50 +200,53 @@ impl<EVT: 'static + Send + Sync> Clone for Event<EVT> {
     }
 }
 
-impl EArc {
-    pub fn new(pool: impl Spawn) -> Result<Self, SpawnError> {
-        let (mut searc, waker) = SEArc::new();
-        let earc = EArc {
-            waker,
-            subscribers: Arc::downgrade(&searc.subscribers),
-            pending_queue: Arc::downgrade(&searc.pending_queue),
-        };
-        pool.spawn(async move {
-            while let Some(event) = searc.next().await {
-                searc.retranslate_event(event);
-            }
-        })?;
-        Ok(earc)
+struct SendEvent {
+    event: Weak<EventBox>,
+}
+
+impl SendEvent {
+    fn new(event: Weak<EventBox>) -> Self {
+        Self { event }
     }
-    fn subscribe(&self, event_id: TypeId, event_queue: Weak<RwLock<EventBoxQueue>>) {
-        self.subscribers
-            .upgrade()
-            .unwrap()
-            .write()
-            .unwrap()
-            .subscribe(event_id, event_queue)
-    }
-    pub fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
-        self.pending_queue
-            .upgrade()
-            .unwrap()
-            .write()
-            .unwrap()
-            .send_event((TypeId::of::<EVT>(), Box::new(event)))
-    }
-    pub fn downgrade(&self) -> WEArc {
-        WEArc {
-            waker: Arc::downgrade(&self.waker),
-            subscribers: self.subscribers.clone(),
-            pending_queue: self.pending_queue.clone(),
+    fn poll(&mut self, cx: &Context) -> Poll<()> {
+        if let Some(event) = self.event.upgrade() {
+            *event.waker.write().unwrap() = Some(cx.waker().clone());
+            Poll::Pending
+        } else {
+            Poll::Ready(())
         }
     }
 }
 
-impl Drop for EArc {
-    fn drop(&mut self) {
-        if let Some(waker) = self.waker.write().unwrap().take() {
-            waker.wake()
+impl Future for SendEvent {
+    type Output = ();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<<Self as Future>::Output> {
+        self.get_mut().poll(cx)
+    }
+}
+
+impl EArc {
+    pub fn new() -> Result<Self, SpawnError> {
+        let subscribers = Arc::new(RwLock::new(Subscribers::new()));
+        let earc = EArc { subscribers };
+        Ok(earc)
+    }
+    fn subscribe(&self, event_id: TypeId, event_queue: Weak<RwLock<EventBoxQueue>>) {
+        self.subscribers
+            .write()
+            .unwrap()
+            .subscribe(event_id, event_queue)
+    }
+    pub async fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
+        let event_id = TypeId::of::<EVT>();
+        let event = Arc::new(EventBox::new(event_id, Box::new(event)));
+        let future = SendEvent::new(Arc::downgrade(&event));
+        self.subscribers.write().unwrap().send_event(event);
+        future.await
+    }
+    pub fn downgrade(&self) -> WEArc {
+        WEArc {
+            subscribers: Arc::downgrade(&self.subscribers),
         }
     }
 }
@@ -274,75 +261,13 @@ impl<EVT: Send + Sync> Drop for EventQueue<EVT> {
 
 impl WEArc {
     pub fn upgrade(&self) -> Option<EArc> {
-        if let Some(waker) = self.waker.upgrade() {
+        if let Some(subscribers) = self.subscribers.upgrade() {
             Some(EArc {
-                waker,
-                subscribers: self.subscribers.clone(),
-                pending_queue: self.pending_queue.clone(),
+                subscribers: subscribers.clone(),
             })
         } else {
             None
         }
-    }
-}
-
-impl SEArc {
-    fn new() -> (Self, Arc<RwLock<Option<Waker>>>) {
-        let waker = Arc::new(RwLock::new(None));
-        let subscribers = Arc::new(RwLock::new(Subscribers::new()));
-        let pending_queue = Arc::new(RwLock::new(PendingQueue::new()));
-        let searc = Self {
-            waker: Arc::downgrade(&waker),
-            subscribers,
-            pending_queue,
-            pending_event: Weak::new(),
-        };
-        (searc, waker)
-    }
-
-    fn poll_next(self: &mut Self, cx: &mut Context<'_>) -> Poll<Option<Arc<EventBox>>> {
-        // Update waker for pending events queue - waked when event is sent through EArc
-        self.pending_queue
-            .write()
-            .unwrap()
-            .set_waker(cx.waker().clone());
-        let drop_waker = self.waker.upgrade();
-        if let Some(ref drop_waker) = drop_waker {
-            // Update waker for earc object itself (if it's still alive) - waked when all colies of EArc is dropped
-            *drop_waker.write().unwrap() = Some(cx.waker().clone());
-        }
-        if let Some(pending_event) = self.pending_event.upgrade() {
-            // Update waker for pending event - waked when translated event is dropped by all
-            // subscribers.
-            *pending_event.waker.write().unwrap() = Some(cx.waker().clone());
-            // Translated event is not dropped yet, do not process other events in queue
-            return Poll::Pending;
-        }
-        let event = self.pending_queue.write().unwrap().get_event();
-        if let Some((event_id, event)) = event {
-            // If queue is not empty, process it - all messages must be delivered
-            let event = Arc::new(EventBox::new(event_id, event, cx.waker().clone()));
-            self.pending_event = Arc::downgrade(&event);
-            Poll::Ready(Some(event))
-        } else {
-            // Queue is empty
-            if drop_waker.is_some() {
-                Poll::Pending
-            } else {
-                // All copies of EArc dropped - no more events can be sent, stop processing
-                Poll::Ready(None)
-            }
-        }
-    }
-    fn retranslate_event(&self, event: Arc<EventBox>) {
-        self.subscribers.write().unwrap().send_event(event)
-    }
-}
-
-impl Stream for SEArc {
-    type Item = Arc<EventBox>;
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Arc<EventBox>>> {
-        self.get_mut().poll_next(cx)
     }
 }
 
