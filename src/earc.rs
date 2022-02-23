@@ -16,7 +16,7 @@ pub struct EArc {
 }
 
 /// Non-owning reference to EArc
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct WEArc {
     subscribers: Weak<RwLock<Subscribers>>,
 }

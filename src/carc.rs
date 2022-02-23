@@ -64,6 +64,15 @@ impl<T: 'static> PartialEq for WCArc<T> {
     }
 }
 
+impl<T: 'static> Default for WCArc<T> {
+    fn default() -> Self {
+        Self {
+            object: Default::default(),
+            call_wakers: Default::default(),
+        }
+    }
+}
+
 impl<T: 'static> CArc<T> {
     fn add_call_waker(&self, waker: Waker) {
         self.call_wakers.write().unwrap().push(waker);

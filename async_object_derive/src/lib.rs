@@ -86,7 +86,7 @@ pub fn async_object_decl(
         }
         impl Clone for #carc_ident {
             fn clone(&self) -> Self {
-                #carc_ident {
+                Self {
                     carc: self.carc.clone()
                 }
             }
@@ -112,8 +112,15 @@ pub fn async_object_decl(
         }
         impl Clone for #wcarc_ident {
             fn clone(&self) -> Self {
-                #wcarc_ident {
+                Self {
                     wcarc: self.wcarc.clone()
+                }
+            }
+        }
+        impl Default for #wcarc_ident {
+            fn default() -> Self {
+                Self {
+                    wcarc: async_object::WCArc::<#object_ident>::default()
                 }
             }
         }
@@ -193,6 +200,14 @@ pub fn async_object_with_events_decl(
                 #wcarc_ident {
                     wcarc: self.wcarc.clone(),
                     wearc: self.wearc.clone()
+                }
+            }
+        }
+        impl Default for #wcarc_ident {
+            fn default() -> Self {
+                Self {
+                    wcarc: async_object::WCArc::<#object_ident>::default(),
+                    wearc: async_object::WEArc::default(),
                 }
             }
         }
