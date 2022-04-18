@@ -26,6 +26,23 @@ impl<T: 'static> CArc<T> {
             call_wakers: Arc::new(RwLock::new(Vec::new())),
         }
     }
+    pub fn new_cyclic<F>(data_fn: F) -> Self
+    where
+        F: FnOnce(WCArc<T>) -> T,
+    {
+        let call_wakers = Arc::new(RwLock::new(Vec::new()));
+        let object = Arc::new_cyclic(|v| {
+            let wcarc = WCArc::<T> {
+                object: v.clone(),
+                call_wakers: Arc::downgrade(&call_wakers),
+            };
+            RwLock::new(data_fn(wcarc))
+        });
+        Self {
+            object,
+            call_wakers,
+        }
+    }
     pub fn downgrade(&self) -> WCArc<T> {
         WCArc {
             object: Arc::downgrade(&self.object),

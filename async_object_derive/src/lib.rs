@@ -78,7 +78,21 @@ pub fn async_object_decl(
                    carc: async_object::CArc::new(object)
                 }
             }
-            #wcarc_vis fn downgrade(&self) -> #wcarc_ident {
+            #object_vis fn create_cyclic<F>(data_fn: F) -> Self
+                where
+                F: FnOnce(#wcarc_ident) -> #object_ident,
+            {
+                let carc = async_object::CArc::new_cyclic(|v| {
+                    let wcarc = #wcarc_ident {
+                        wcarc: v.clone()
+                    };
+                    data_fn(wcarc)
+                });
+                Self {
+                   carc
+                }
+            }
+             #wcarc_vis fn downgrade(&self) -> #wcarc_ident {
                 #wcarc_ident {
                    wcarc: self.carc.downgrade()
                 }
@@ -148,11 +162,28 @@ pub fn async_object_with_events_decl(
             earc: async_object::EArc
         }
         impl #carc_ident {
-            #object_vis fn create(object: #object_ident) -> Result<Self,futures::task::SpawnError> {
-                Ok(Self {
+            #object_vis fn create(object: #object_ident) -> Self {
+                Self {
                     carc: async_object::CArc::new(object),
-                    earc: async_object::EArc::new()?
-                })
+                    earc: async_object::EArc::new()
+                }
+            }
+            #object_vis fn create_cyclic<F>(data_fn: F) -> Self
+                where
+                F: FnOnce(#wcarc_ident) -> #object_ident,
+            {
+                let earc = async_object::EArc::new();
+                let carc = async_object::CArc::new_cyclic(|v| {
+                    let wcarc = #wcarc_ident {
+                        wcarc: v.clone(),
+                        wearc: earc.downgrade()
+                    };
+                    data_fn(wcarc)
+                });
+                Self {
+                   carc,
+                   earc
+                }
             }
             #wcarc_vis fn downgrade(&self) -> #wcarc_ident {
                 #wcarc_ident {

@@ -7,7 +7,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use futures::{task::SpawnError, Future, Stream};
+use futures::{Future, Stream};
 
 /// Reference-counting object based on Arc<RwLock<...>> with methods for broadcasting events
 #[derive(Clone)]
@@ -226,10 +226,9 @@ impl Future for SendEvent {
 }
 
 impl EArc {
-    pub fn new() -> Result<Self, SpawnError> {
+    pub fn new() -> Self {
         let subscribers = Arc::new(RwLock::new(Subscribers::new()));
-        let earc = EArc { subscribers };
-        Ok(earc)
+        Self { subscribers }
     }
     fn subscribe(&self, event_id: TypeId, event_queue: Weak<RwLock<EventBoxQueue>>) {
         self.subscribers

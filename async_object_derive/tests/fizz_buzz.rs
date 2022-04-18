@@ -73,7 +73,7 @@ struct GeneratorImpl;
 
 impl Generator {
     pub fn new() -> Self {
-        Generator::create(GeneratorImpl).unwrap()
+        Generator::create(GeneratorImpl)
     }
     fn values(&self) -> EventStream<usize> {
         self.create_event_stream()

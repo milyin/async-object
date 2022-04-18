@@ -77,7 +77,7 @@ impl Sink {
 struct Generator(EArc);
 impl Generator {
     pub fn new() -> Self {
-        Generator(EArc::new().unwrap())
+        Generator(EArc::new())
     }
     fn values(&self) -> EventStream<usize> {
         EventStream::new(&self.0)
