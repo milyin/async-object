@@ -1,3 +1,16 @@
+//! # Async Object
+//!
+//! This crate provides reference-counting wrappers and support for event publishing/subscription
+//! for using objects in multithread asynchronous environment.
+//!
+//! The main purpose of the library is to provide foundation for my experimental GUI library
+//! [WAG](https://github.com/milyin/wag), but it's abstract enough to be used anywhere else.
+//!
+//! The library primitives (CArc, EArc, etc) ususally are not supposed to be used directly. Macros for generation
+//! the wrapper structures should be employed instead.
+//!
+//! See documentation for async_object_derive library for usage sample
+//!
 mod carc;
 mod earc;
 
