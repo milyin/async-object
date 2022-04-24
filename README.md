@@ -5,7 +5,7 @@ This crate provides reference-counting wrappers with event support for using obj
 The main purpose of the library is to provide foundation for my experimental GUI library
 [WAG](https://github.com/milyin/wag), but it's abstract enough to be used anywhere else.
 
-See more detailed documentation at [async_object](https://docs.rs/async_object/0.1.0/async_object/) and [async_object_derive](https://docs.rs/async_object_derive/0.1.0/async_object_derive/)
+See more detailed documentation at docs.rs: [async_object](https://docs.rs/async_object/0.1.0/async_object/) and [async_object_derive](https://docs.rs/async_object_derive/0.1.0/async_object_derive/)
 
 # Example
 
