@@ -1,8 +1,8 @@
 # Async Object
 
-This crate provides reference-counting wrappers with event support for using objects in asynchronous environment
+This crate provides reference-counting wrappers with event support for using objects in asynchronous environment.
 
-The main purpose of the library is to provide foundation for my experimental GUI library
+The main purpose of the crate is to provide foundation for my experimental GUI library
 [WAG](https://github.com/milyin/wag), but it's abstract enough to be used anywhere else.
 
 See more detailed documentation at docs.rs: [async_object](https://docs.rs/async_object/0.1.1/async_object/) and [async_object_derive](https://docs.rs/async_object_derive/0.1.0/async_object_derive/)
@@ -10,7 +10,7 @@ See more detailed documentation at docs.rs: [async_object](https://docs.rs/async
 # Example
 
 This code makes wrappers Background and WBackground for BackgroundImpl object. Internally they are just
-Arc<Rwlock<BackgroundImpl>> and Weak<Rwlock<BackgroundImpl>> plus tooling for access the Rwlock without blocking
+Arc\<Rwlock\<BackgroundImpl\>\> and Weak\<Rwlock\<BackgroundImpl\>\> plus tooling for access the Rwlock without blocking
 asyncronous job.
 
  ```
