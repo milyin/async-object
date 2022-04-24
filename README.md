@@ -65,7 +65,7 @@ impl ButtonImpl {
     async pub fn async_press(&mut self) {
         self.send_event(ButtonEvent::Press).await
     }
-    async pub fn press(&mut self) {
+    pub fn press(&mut self) {
         let _ = self.send_event(ButtonEvent::Press)
     }
     pub fn events(&self) -> EventStream<ButtonEvent> {
