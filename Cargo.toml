@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 description = "Async Object wrapper"
 repository = "https://github.com/milyin/async-object"
 # documentation = ""
-readme = ".github/readme.md"
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
