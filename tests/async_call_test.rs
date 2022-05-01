@@ -1,4 +1,4 @@
-use async_object::CArc;
+use async_object::{CArc, WCArc};
 use futures::{executor::LocalPool, task::LocalSpawnExt};
 use std::{cell::RefCell, rc::Rc};
 
@@ -19,6 +19,7 @@ impl CounterImpl {
 }
 
 struct Counter(CArc<CounterImpl>);
+struct WCounter(WCArc<CounterImpl>);
 
 impl Counter {
     fn new() -> Self {
@@ -33,6 +34,21 @@ impl Counter {
         self.0
             .async_call(|counter: &CounterImpl| counter.internal_value())
             .await
+    }
+    fn downgrade(&self) -> WCounter {
+        WCounter(self.0.downgrade())
+    }
+    fn id(&self) -> usize {
+        self.0.id()
+    }
+}
+
+impl WCounter {
+    fn upgrade(&self) -> Option<Counter> {
+        self.0.upgrade().map(|v| Counter(v))
+    }
+    fn id(&self) -> Option<usize> {
+        self.0.id()
     }
 }
 
@@ -70,4 +86,25 @@ fn test_handle_call_mut() {
     pool.run_until_stalled();
     assert!(test_value_r.borrow().is_some());
     assert!(test_value_r.borrow().unwrap() == 1);
+}
+
+#[test]
+fn test_id() {
+    let a = Counter::new();
+    let b = Counter::new();
+    let wa = a.downgrade();
+    let wb = b.downgrade();
+    let ua = wa.upgrade().unwrap();
+    let ub = wb.upgrade().unwrap();
+    assert!(a.id() != b.id());
+    assert!(a.id() == wa.id().unwrap());
+    assert!(b.id() == wb.id().unwrap());
+    assert!(a.id() == ua.id());
+    assert!(b.id() == ub.id());
+    drop(a);
+    drop(b);
+    drop(ua);
+    drop(ub);
+    assert!(wa.id() == None);
+    assert!(wb.id() == None);
 }

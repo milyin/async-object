@@ -49,6 +49,9 @@ impl<T: 'static> CArc<T> {
             call_wakers: Arc::downgrade(&self.call_wakers),
         }
     }
+    pub fn id(&self) -> usize {
+        Arc::as_ptr(&self.object) as usize
+    }
 }
 
 impl<T: 'static> Clone for CArc<T> {
@@ -126,6 +129,13 @@ impl<T: 'static> WCArc<T> {
             })
         } else {
             None
+        }
+    }
+    pub fn id(&self) -> Option<usize> {
+        if self.object.strong_count() == 0 {
+            None
+        } else {
+            Some(Weak::as_ptr(&self.object) as usize)
         }
     }
 }

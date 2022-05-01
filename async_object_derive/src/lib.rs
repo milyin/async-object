@@ -8,7 +8,7 @@
 //! Arc<Rwlock<BackgroundImpl>> and Weak<Rwlock<BackgroundImpl>> plus tooling for access the Rwlock without blocking
 //! asyncronous job.
 //!
-//!  ```
+//!  ```compile fail
 //! #[async_object_decl(pub Background, pub WBackground)]
 //! struct BackgroundImpl {
 //!     color: Color
@@ -33,7 +33,7 @@
 //!
 //! The structures Background and WBackground will have these automatically generated proxy methods:
 //!
-//! ```
+//! ```compile fail
 //! impl Background {
 //!     pub fn set_color(...);
 //!     pub fn get_golor() -> Color;
@@ -56,7 +56,7 @@
 //! until mutex is released, allowing other tasks to continue on this worker.
 //!  
 //! There is also event pub/sub support. For example:
-//! ```
+//! ```compile fail
 //! enum ButtonEvent { Press, Release }
 //!
 //! #[async_object_with_events_decl(pub Button, pub WButton)]
@@ -79,7 +79,7 @@
 //!
 //! Below is the code which changes background color when button is pressed
 //!
-//! ```
+//! ```compile fail
 //! let pool = ThreadPool::builder().create().unwrap();
 //! let button = Button::new();
 //! let background = Background::new();
@@ -202,7 +202,10 @@ pub fn async_object_decl(
                    carc
                 }
             }
-             #wcarc_vis fn downgrade(&self) -> #wcarc_ident {
+            #carc_vis fn id(&self) -> usize {
+                self.carc.id()
+            }
+            #wcarc_vis fn downgrade(&self) -> #wcarc_ident {
                 #wcarc_ident {
                    wcarc: self.carc.downgrade()
                 }
@@ -224,6 +227,9 @@ pub fn async_object_decl(
             wcarc: async_object::WCArc<#object_ident>
         }
         impl #wcarc_ident {
+            #wcarc_vis fn id(&self) -> Option<usize> {
+                self.wcarc.id()
+            }
             #carc_vis fn upgrade(&self) -> Option<#carc_ident> {
                 if let Some(carc) = self.wcarc.upgrade() {
                     Some(#carc_ident {
@@ -295,6 +301,9 @@ pub fn async_object_with_events_decl(
                    earc
                 }
             }
+            #carc_vis fn id(&self) -> usize {
+                self.carc.id()
+            }
             #wcarc_vis fn downgrade(&self) -> #wcarc_ident {
                 #wcarc_ident {
                     wcarc: self.carc.downgrade(),
@@ -334,6 +343,9 @@ pub fn async_object_with_events_decl(
                 } else {
                     None
                 }
+            }
+            #wcarc_vis fn id(&self) -> Option<usize> {
+                self.wcarc.id()
             }
         }
         impl Clone for #wcarc_ident {

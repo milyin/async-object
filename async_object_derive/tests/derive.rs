@@ -54,6 +54,8 @@ fn async_object_decl_test() {
     assert!(wtest.get() == Ok(Some(43)));
     assert!(test_cyclic.is_cyclic());
     assert!(!test.is_cyclic());
+    assert!(test.id() == wtest.id().unwrap());
+    assert!(test.id() != test_cyclic.id());
 }
 
 #[async_object_with_events_decl(pub Test2, pub WTest2)]
