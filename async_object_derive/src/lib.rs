@@ -120,7 +120,8 @@ use syn::{
     punctuated::Punctuated,
     token::{Async, Comma, Gt, Lt, Paren, RArrow},
     AngleBracketedGenericArguments, DeriveInput, FnArg, GenericArgument, Ident, ImplItem, ItemImpl,
-    Path, PathArguments, PathSegment, ReturnType, Signature, Token, Type, TypePath, TypeTuple,
+    Pat, PatIdent, PatType, Path, PathArguments, PathSegment, ReturnType, Signature, Token, Type,
+    TypePath, TypeTuple,
 };
 
 fn append(
@@ -504,12 +505,51 @@ pub fn async_object_impl(
                         .iter()
                         .filter_map(|v| {
                             if let FnArg::Typed(arg) = v {
-                                Some(&arg.pat)
+                                if let Pat::Ident(ref ident) = *arg.pat {
+                                    Some(&ident.ident)
+                                } else {
+                                    None
+                                }
                             } else {
                                 None
                             }
                         })
                         .collect::<Vec<_>>();
+
+                    // Remove 'mut' before param names in proxy method signatures to avoid warnings.
+                    // Params are passed by value anyway and their mutability is important only in
+                    // user's implementation method itself, not in proxy methods.
+                    //
+                    // I.e.
+                    // fn foo(&self, mut bar: Buzz) { bar.call_mut_method(); }
+                    //
+                    // is converted to
+                    // fn foo(&self, bar: Buzz { self.carc.call(|v| v.foo(bar)); }
+                    // where 'bar' not need to be mutable
+                    //
+                    // TODO: add error diagnostic when for methods with parameters passed by reference
+                    //
+                    let inputs = signature
+                        .inputs
+                        .iter()
+                        .map(|v| {
+                            if let FnArg::Typed(arg) = v {
+                                if let Pat::Ident(ref ident) = *arg.pat {
+                                    let pat = Box::new(Pat::Ident(PatIdent {
+                                        mutability: None,
+                                        ..ident.clone()
+                                    }));
+                                    return FnArg::Typed(PatType { pat, ..arg.clone() });
+                                }
+                            }
+                            return v.clone();
+                        })
+                        .collect();
+                    let signature = Signature {
+                        inputs,
+                        ..signature.clone()
+                    };
+
                     let async_signature = Signature {
                         asyncness: Some(Async::default()),
                         ident: async_method_name.clone(),
