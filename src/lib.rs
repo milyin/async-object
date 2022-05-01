@@ -9,7 +9,7 @@
 //! The library primitives (CArc, EArc, etc) ususally are not supposed to be used directly. Macros for generation
 //! the wrapper structures should be employed instead.
 //!
-//! See documentation for async_object_derive library for usage sample
+//! See documentation for [async_object_derive](https://docs.rs/async_object_derive/0.1.0/async_object_derive/) library for usage sample
 //!
 mod carc;
 mod earc;
