@@ -13,3 +13,6 @@ readme = "README.md"
 [dependencies.futures]
 version = "0.3.17"
 features = ["thread-pool"]
+
+[dev-dependencies]
+async-std = "1.11.0"

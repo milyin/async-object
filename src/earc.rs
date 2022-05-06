@@ -23,7 +23,16 @@ pub struct WEArc {
 
 /// Container for event. The main purpose of this container is to ensure correct order of events.
 /// Asyncronous send_event function finishes only when all copies of Event are destroyed. This allows to guarantee
-/// that sent event was processed by all handlers at the moment when send_event returned
+/// that sent event have been processed by all handlers by the moment when send_event returns.
+///
+/// Event object is created as output of EventStream. There is no other way to create it.
+///
+/// Function which handles Event object may produce new events by calling send_event. Sometimes it's necessary to
+/// ensure that these derived events are handled before new instance of source event is produced. For example if mouse
+/// click produces button press event, we have to be sure that button press event is handled before next mouse click arrives.
+/// To do it the send_dependent_event function may be used. It stores hidden reference to source event into produced event and
+/// therefore guarantees that source event stream holds until all instances of produced event are dropped.
+///
 pub struct Event<EVT: 'static + Send + Sync> {
     event_box: Arc<EventBox>,
     _phantom: PhantomData<EVT>,
@@ -40,6 +49,7 @@ struct EventBox {
     event_id: TypeId,
     event: Box<dyn Any + Send + Sync>,
     waker: RwLock<Option<Waker>>,
+    _source: Option<Arc<EventBox>>,
 }
 
 type EventBoxQueue = EventQueue<Arc<EventBox>>;
@@ -67,11 +77,16 @@ impl Drop for EventBox {
 }
 
 impl EventBox {
-    fn new(event_id: TypeId, event: Box<dyn Any + Send + Sync>) -> Self {
+    fn new(
+        event_id: TypeId,
+        event: Box<dyn Any + Send + Sync>,
+        source: Option<Arc<EventBox>>,
+    ) -> Self {
         Self {
             event_id,
             event,
             waker: RwLock::new(None),
+            _source: source,
         }
     }
     pub fn get_event_id(&self) -> TypeId {
@@ -236,12 +251,45 @@ impl EArc {
             .unwrap()
             .subscribe(event_id, event_queue)
     }
-    pub async fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
+    fn post_event_impl<EVT: Send + Sync + 'static>(
+        &self,
+        event: EVT,
+        source: Option<Arc<EventBox>>,
+    ) {
         let event_id = TypeId::of::<EVT>();
-        let event = Arc::new(EventBox::new(event_id, Box::new(event)));
+        let event = Arc::new(EventBox::new(event_id, Box::new(event), source));
+        self.subscribers.write().unwrap().send_event(event);
+    }
+    async fn send_event_impl<EVT: Send + Sync + 'static>(
+        &self,
+        event: EVT,
+        source: Option<Arc<EventBox>>,
+    ) {
+        let event_id = TypeId::of::<EVT>();
+        let event = Arc::new(EventBox::new(event_id, Box::new(event), source));
         let future = SendEvent::new(Arc::downgrade(&event));
         self.subscribers.write().unwrap().send_event(event);
         future.await
+    }
+    pub fn post_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
+        self.post_event_impl(event, None)
+    }
+    pub async fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
+        self.send_event_impl(event, None).await
+    }
+    pub fn post_dependent_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(
+        &self,
+        event: EVT,
+        source: Event<EVTSRC>,
+    ) {
+        self.post_event_impl(event, Some(source.event_box))
+    }
+    pub async fn send_dependent_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(
+        &self,
+        event: EVT,
+        source: Event<EVTSRC>,
+    ) {
+        self.send_event_impl(event, Some(source.event_box)).await
     }
     pub fn downgrade(&self) -> WEArc {
         WEArc {
