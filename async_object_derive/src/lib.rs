@@ -337,17 +337,19 @@ pub fn async_object_with_events_decl(
                     wearc: self.earc.downgrade()
                 }
             }
-            async fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
-                self.earc.send_event(event).await
+            async fn send_event<EVT: Send + Sync + 'static, EVTSRC: Into<Option<std::sync::Arc<async_object::EventBox>>>>(
+                &self,
+                event: EVT,
+                source: EVTSRC,
+            ) {
+                self.earc.send_event(event, source).await
             }
-            fn post_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
-                self.earc.post_event(event)
-            }
-            async fn send_derived_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(&self, event: EVT, source: async_object::Event<EVTSRC>) {
-                self.earc.send_derived_event(event, source).await
-            }
-            fn post_derived_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(&self, event: EVT, source: async_object::Event<EVTSRC>) {
-                self.earc.post_derived_event(event, source)
+            fn post_event<EVT: Send + Sync + 'static, EVTSRC: Into<Option<std::sync::Arc<async_object::EventBox>>>>(
+                &self,
+                event: EVT,
+                source: EVTSRC,
+            ) {
+                self.earc.post_event(event, source)
             }
             fn create_event_stream<EVT: Send + Sync + 'static>(&self) -> async_object::EventStream<EVT> {
                 async_object::EventStream::new(&self.earc)

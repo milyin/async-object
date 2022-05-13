@@ -116,7 +116,7 @@ fn async_object_with_events_decl_test() {
         .spawn({
             let test = test.clone();
             async move {
-                test.send_event(44usize).await;
+                test.send_event(44usize, None).await;
             }
         })
         .unwrap();

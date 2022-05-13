@@ -79,7 +79,7 @@ impl Generator {
         self.create_event_stream()
     }
     async fn send_value(&mut self, value: usize) {
-        self.send_event(value).await
+        self.send_event(value, None).await
     }
 }
 
