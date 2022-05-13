@@ -45,7 +45,7 @@ pub struct EventStream<EVT: Send + Sync + 'static> {
     _phantom: PhantomData<EVT>,
 }
 
-struct EventBox {
+pub struct EventBox {
     event_id: TypeId,
     event: Box<dyn Any + Send + Sync>,
     waker: RwLock<Option<Waker>>,
@@ -89,7 +89,7 @@ impl EventBox {
             _source: source,
         }
     }
-    pub fn get_event_id(&self) -> TypeId {
+    fn get_event_id(&self) -> TypeId {
         self.event_id
     }
     pub fn get_event<EVT: 'static + Send + Sync>(&self) -> Option<&EVT> {
@@ -206,6 +206,12 @@ impl<EVT: 'static + Send + Sync> AsRef<EVT> for Event<EVT> {
     }
 }
 
+impl<EVT: 'static + Send + Sync> Into<Arc<EventBox>> for Event<EVT> {
+    fn into(self) -> Arc<EventBox> {
+        self.event_box.clone()
+    }
+}
+
 impl<EVT: 'static + Send + Sync> Clone for Event<EVT> {
     fn clone(&self) -> Self {
         Self {
@@ -277,19 +283,19 @@ impl EArc {
     pub async fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
         self.send_event_impl(event, None).await
     }
-    pub fn post_derived_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(
+    pub fn post_derived_event<EVT: Send + Sync + 'static, EVTSRC: Into<Arc<EventBox>>>(
         &self,
         event: EVT,
-        source: Event<EVTSRC>,
+        source: EVTSRC,
     ) {
-        self.post_event_impl(event, Some(source.event_box))
+        self.post_event_impl(event, Some(source.into()))
     }
-    pub async fn send_derived_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(
+    pub async fn send_derived_event<EVT: Send + Sync + 'static, EVTSRC: Into<Arc<EventBox>>>(
         &self,
         event: EVT,
-        source: Event<EVTSRC>,
+        source: EVTSRC,
     ) {
-        self.send_event_impl(event, Some(source.event_box)).await
+        self.send_event_impl(event, Some(source.into())).await
     }
     pub fn downgrade(&self) -> WEArc {
         WEArc {
