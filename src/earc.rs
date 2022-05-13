@@ -277,14 +277,14 @@ impl EArc {
     pub async fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
         self.send_event_impl(event, None).await
     }
-    pub fn post_dependent_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(
+    pub fn post_derived_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(
         &self,
         event: EVT,
         source: Event<EVTSRC>,
     ) {
         self.post_event_impl(event, Some(source.event_box))
     }
-    pub async fn send_dependent_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(
+    pub async fn send_derived_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(
         &self,
         event: EVT,
         source: Event<EVTSRC>,

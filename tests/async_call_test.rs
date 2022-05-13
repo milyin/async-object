@@ -190,7 +190,7 @@ fn test_send_dependent_event() {
                         sleep(Duration::from_millis(1)).await;
                         if n % 2 == 0 {
                             // evens.send_event(n).await;
-                            evens.send_dependent_event(n, en).await;
+                            evens.send_derived_event(n, en).await;
                         }
                     }
                 }
@@ -208,7 +208,7 @@ fn test_send_dependent_event() {
                         // drop(en); -- see comments above
                         if n % 2 != 0 {
                             // odds.send_event(n).await;
-                            odds.send_dependent_event(n, en).await;
+                            odds.send_derived_event(n, en).await;
                         }
                     }
                 }
