@@ -343,10 +343,10 @@ pub fn async_object_with_events_decl(
             fn post_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
                 self.earc.post_event(event)
             }
-            async fn send_derived_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(&self, event: EVT, source: Event<EVTSRC>) {
+            async fn send_derived_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(&self, event: EVT, source: async_object::Event<EVTSRC>) {
                 self.earc.send_derived_event(event, source).await
             }
-            fn post_derived_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(&self, event: EVT, source: Event<EVTSRC>) {
+            fn post_derived_event<EVT: Send + Sync + 'static, EVTSRC: Send + Sync + 'static>(&self, event: EVT, source: async_object::Event<EVTSRC>) {
                 self.earc.post_derived_event(event, source)
             }
             fn create_event_stream<EVT: Send + Sync + 'static>(&self) -> async_object::EventStream<EVT> {
