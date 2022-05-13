@@ -83,7 +83,7 @@ impl Generator {
         EventStream::new(&self.0)
     }
     async fn send_value(&mut self, value: usize) {
-        self.0.send_event(value).await
+        self.0.send_event(value, None).await
     }
 }
 

@@ -206,9 +206,9 @@ impl<EVT: 'static + Send + Sync> AsRef<EVT> for Event<EVT> {
     }
 }
 
-impl<EVT: 'static + Send + Sync> Into<Arc<EventBox>> for Event<EVT> {
-    fn into(self) -> Arc<EventBox> {
-        self.event_box.clone()
+impl<EVT: 'static + Send + Sync> Into<Option<Arc<EventBox>>> for Event<EVT> {
+    fn into(self) -> Option<Arc<EventBox>> {
+        Some(self.event_box.clone())
     }
 }
 
@@ -257,45 +257,25 @@ impl EArc {
             .unwrap()
             .subscribe(event_id, event_queue)
     }
-    fn post_event_impl<EVT: Send + Sync + 'static>(
+    pub fn post_event<EVT: Send + Sync + 'static, EVTSRC: Into<Option<Arc<EventBox>>>>(
         &self,
         event: EVT,
-        source: Option<Arc<EventBox>>,
+        source: EVTSRC,
     ) {
         let event_id = TypeId::of::<EVT>();
-        let event = Arc::new(EventBox::new(event_id, Box::new(event), source));
+        let event = Arc::new(EventBox::new(event_id, Box::new(event), source.into()));
         self.subscribers.write().unwrap().send_event(event);
     }
-    async fn send_event_impl<EVT: Send + Sync + 'static>(
+    pub async fn send_event<EVT: Send + Sync + 'static, EVTSRC: Into<Option<Arc<EventBox>>>>(
         &self,
         event: EVT,
-        source: Option<Arc<EventBox>>,
+        source: EVTSRC,
     ) {
         let event_id = TypeId::of::<EVT>();
-        let event = Arc::new(EventBox::new(event_id, Box::new(event), source));
+        let event = Arc::new(EventBox::new(event_id, Box::new(event), source.into()));
         let future = SendEvent::new(Arc::downgrade(&event));
         self.subscribers.write().unwrap().send_event(event);
         future.await
-    }
-    pub fn post_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
-        self.post_event_impl(event, None)
-    }
-    pub async fn send_event<EVT: Send + Sync + 'static>(&self, event: EVT) {
-        self.send_event_impl(event, None).await
-    }
-    pub fn post_derived_event<EVT: Send + Sync + 'static, EVTSRC: Into<Arc<EventBox>>>(
-        &self,
-        event: EVT,
-        source: EVTSRC,
-    ) {
-        self.post_event_impl(event, Some(source.into()))
-    }
-    pub async fn send_derived_event<EVT: Send + Sync + 'static, EVTSRC: Into<Arc<EventBox>>>(
-        &self,
-        event: EVT,
-        source: EVTSRC,
-    ) {
-        self.send_event_impl(event, Some(source.into())).await
     }
     pub fn downgrade(&self) -> WEArc {
         WEArc {

@@ -128,7 +128,7 @@
 //! This may be inappropriate. For example: user presses "Apply" button and then "Close" button in the dialog. "Close" button is handled earler,
 //! than "Apply". It's subscriber destroys the whole dialog. "Apply"'s subcriber have nothing to do. User's data is lost.
 //!
-//! To avoid this the concept of "derived" event is added. The functions send_dervied_event and post_derived_event have additional parameter -
+//! To avoid this the concept of "source" event is added. The functions send_event and post_event have the additional optional parameter -
 //! event which caused the sent one. Reference to this 'source' event is saved inside Event wrapper of new event and therefore send_event which
 //! sent this source event is blocked until all derived events are dropped. So C2 click in example above is sent only when all instances of P1
 //! are destroyed. So click on "Close" button is sent only after "Apply" press button event is handled.  

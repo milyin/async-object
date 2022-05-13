@@ -120,9 +120,9 @@ fn test_send_event() {
     let mut numbers = EventStream::<usize>::new(&earc);
     pool.spawner()
         .spawn_local(async move {
-            earc.send_event(1 as usize).await;
-            earc.send_event(2 as usize).await;
-            earc.send_event(3 as usize).await;
+            earc.send_event(1 as usize, None).await;
+            earc.send_event(2 as usize, None).await;
+            earc.send_event(3 as usize, None).await;
             // last copy of earc is dropped here, make sure of it
             let wearc = earc.downgrade();
             drop(earc);
@@ -169,7 +169,7 @@ fn test_send_dependent_event() {
                 let source = source.clone();
                 async move {
                     for n in 0usize..10 {
-                        source.send_event(n).await;
+                        source.send_event(n, None).await;
                     }
                 }
             })
@@ -184,13 +184,13 @@ fn test_send_dependent_event() {
                     while let Some(en) = src.next().await {
                         let n = *en.as_ref();
                         // Release source event and skip forward other task to provoke disorder if dependent events does't work
-                        // Comment 'send_dependent_event', uncomment 'send_event' and 'drop_en' to make test fail
+                        // Comment 'send_event' with 'en' parameter, uncomment 'send_event(n, None)' and 'drop_en' to make test fail
                         // TODO: Make this fail part of test
                         // drop(en);
                         sleep(Duration::from_millis(1)).await;
                         if n % 2 == 0 {
-                            // evens.send_event(n).await;
-                            evens.send_derived_event(n, en).await;
+                            // evens.send_event(n, None).await;
+                            evens.send_event(n, en).await;
                         }
                     }
                 }
@@ -208,7 +208,7 @@ fn test_send_dependent_event() {
                         // drop(en); -- see comments above
                         if n % 2 != 0 {
                             // odds.send_event(n).await;
-                            odds.send_derived_event(n, en).await;
+                            odds.send_event(n, en).await;
                         }
                     }
                 }
