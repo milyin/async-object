@@ -80,7 +80,7 @@ impl Generator {
         Generator(EArc::new())
     }
     fn values(&self) -> EventStream<usize> {
-        EventStream::new(&self.0)
+        self.0.create_event_stream()
     }
     async fn send_value(&mut self, value: usize) {
         self.0.send_event(value, None).await

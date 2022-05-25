@@ -282,6 +282,12 @@ impl EArc {
             subscribers: Arc::downgrade(&self.subscribers),
         }
     }
+    pub fn create_event_stream<EVT: Send + Sync + 'static>(&self) -> EventStream<EVT> {
+        EventStream::new(&self)
+    }
+    pub fn id(&self) -> usize {
+        Arc::as_ptr(&self.subscribers) as usize
+    }
 }
 
 impl<EVT: Send + Sync> Drop for EventQueue<EVT> {
