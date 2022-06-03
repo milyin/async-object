@@ -290,6 +290,18 @@ impl EArc {
     }
 }
 
+impl PartialEq for EArc {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.subscribers, &other.subscribers)
+    }
+}
+
+impl PartialEq for WEArc {
+    fn eq(&self, other: &Self) -> bool {
+        self.subscribers.ptr_eq(&other.subscribers)
+    }
+}
+
 impl<EVT: Send + Sync> Drop for EventQueue<EVT> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
