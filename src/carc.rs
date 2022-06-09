@@ -7,13 +7,13 @@ use std::{
 
 use futures::Future;
 
-/// Reference-counting pointer based on Arc<RwLock<T>> with methods for access wrapped data from asynchronous code
+/// Reference-counting pointer based on ```Arc<RwLock<T>>``` with methods for access wrapped data from asynchronous code
 pub struct CArc<T: 'static> {
     object: Arc<RwLock<T>>,
     call_wakers: Arc<RwLock<Vec<Waker>>>,
 }
 
-/// Non-owning variant of ['CArc']
+/// Non-owning reference to [CArc]
 pub struct WCArc<T: 'static> {
     object: Weak<RwLock<T>>,
     call_wakers: Weak<RwLock<Vec<Waker>>>,
