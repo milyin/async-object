@@ -6,10 +6,21 @@
 //! The main purpose of the library is to provide foundation for my experimental GUI library
 //! [WAG](https://github.com/milyin/wag), but it's abstract enough to be used anywhere else.
 //!
-//! The library primitives (CArc, EArc, etc) ususally are not supposed to be used directly. Macros for generation
-//! the wrapper structures should be employed instead.
+//! Library implements [CArc<T>](CArc) wrapper containing```Arc<RwLock<T>``` inside.
+//! ```CArc``` provides methods for accessing ```T``` both in synchronous and asychronous environment.
+//! Sync methods [CArc::call] blocks calling thread, async ones [CArc::async_call] releases task if wrapper object
+//! is locked, allowing other async tasks to continue.
 //!
-//! See documentation for [async_object_derive](https://docs.rs/async_object_derive/0.1.0/async_object_derive/) library for usage sample
+//! Example:
+//!
+//! ```
+//! use async_object::CArc;
+//! let obj = CArc::new(42 as usize);
+//! obj.call_mut(|v| *v += 1 );
+//! ```
+//!
+//! Library also provides event queue [EArc] which allows to subscribe to async stream of events.
+//!
 //!
 mod carc;
 mod earc;
