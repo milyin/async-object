@@ -7,30 +7,36 @@ use std::{
 
 use futures::Future;
 
-/// Reference-counting pointer based on ```Arc<RwLock<T>>``` with methods for access wrapped data from asynchronous code
+#[derive(Default)]
+struct Wakers {
+    call_mut: Vec<Waker>,
+    call: Vec<Waker>,
+}
+
+/// Reference-counting pointer based on ```Arc<RwLock<T>>``` with methods for accessing wrapped data from asynchronous code
 pub struct CArc<T: 'static> {
     object: Arc<RwLock<T>>,
-    call_wakers: Arc<RwLock<Vec<Waker>>>,
+    call_wakers: Arc<RwLock<Wakers>>,
 }
 
 /// Non-owning reference to [CArc]
 pub struct WCArc<T: 'static> {
     object: Weak<RwLock<T>>,
-    call_wakers: Weak<RwLock<Vec<Waker>>>,
+    call_wakers: Weak<RwLock<Wakers>>,
 }
 
 impl<T: 'static> CArc<T> {
     pub fn new(object: T) -> Self {
         Self {
             object: Arc::new(RwLock::new(object)),
-            call_wakers: Arc::new(RwLock::new(Vec::new())),
+            call_wakers: Arc::new(RwLock::new(Wakers::default())),
         }
     }
     pub fn new_cyclic<F>(data_fn: F) -> Self
     where
         F: FnOnce(WCArc<T>) -> T,
     {
-        let call_wakers = Arc::new(RwLock::new(Vec::new()));
+        let call_wakers = Arc::new(RwLock::new(Wakers::default()));
         let object = Arc::new_cyclic(|v| {
             let wcarc = WCArc::<T> {
                 object: v.clone(),
@@ -95,7 +101,13 @@ impl<T: 'static> Default for WCArc<T> {
 
 impl<T: 'static> CArc<T> {
     fn add_call_waker(&self, waker: Waker) {
-        self.call_wakers.write().unwrap().push(waker);
+        self.call_wakers.write().unwrap().call.push(waker);
+    }
+    fn add_call_mut_waker(&self, waker: Waker) {
+        self.call_wakers.write().unwrap().call_mut.push(waker);
+    }
+    fn no_mut_wakers_pending(&self) -> bool {
+        !self.call_wakers.read().unwrap().call_mut.is_empty()
     }
     fn wake_calls(&self) {
         drain_wakers(&self.call_wakers)
@@ -189,18 +201,24 @@ where
         }
     }
     fn poll(&mut self, cx: &Context) -> Poll<R> {
-        self.carc.add_call_waker(cx.waker().clone());
         let res = match self.func.take().unwrap() {
             Either::F(func) => {
-                if let Ok(object) = self.carc.object.try_read() {
-                    let r = func(&*object);
-                    Poll::Ready(r)
+                self.carc.add_call_waker(cx.waker().clone());
+                if self.carc.no_mut_wakers_pending() {
+                    if let Ok(object) = self.carc.object.try_read() {
+                        let r = func(&*object);
+                        Poll::Ready(r)
+                    } else {
+                        self.func = Some(Either::F(func));
+                        Poll::Pending
+                    }
                 } else {
                     self.func = Some(Either::F(func));
                     Poll::Pending
                 }
             }
             Either::Fmut(func_mut) => {
+                self.carc.add_call_mut_waker(cx.waker().clone());
                 if let Ok(mut object) = self.carc.object.try_write() {
                     let r = func_mut(&mut *object);
                     Poll::Ready(r)
@@ -226,6 +244,11 @@ impl<T: 'static, R, F: FnOnce(&T) -> R, FMut: FnOnce(&mut T) -> R> Future
     }
 }
 
-fn drain_wakers(wakers: &Arc<RwLock<Vec<Waker>>>) {
-    wakers.write().unwrap().drain(..).for_each(|w| w.wake());
+fn drain_wakers(wakers: &Arc<RwLock<Wakers>>) {
+    let mut wakers = wakers.write().unwrap();
+    if wakers.call_mut.is_empty() {
+        wakers.call.drain(..).for_each(|w| w.wake());
+    } else {
+        wakers.call_mut.drain(..).for_each(|w| w.wake());
+    }
 }

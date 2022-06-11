@@ -21,8 +21,9 @@ pub struct WEArc {
     subscribers: Weak<RwLock<Subscribers>>,
 }
 
-/// Container for event. The main purpose of this container is to ensure correct order of events.
-/// Asyncronous send_event function finishes only when all copies of Event are destroyed. This allows to guarantee
+/// Container for event. The main purpose of this container is to ensure correct order of event handling.
+///
+/// Asyncronous [EArc::send_event] function finishes only when all copies of ```Event``` are destroyed. This allows to guarantee
 /// that sent event have been processed by all handlers by the moment when send_event returns.
 ///
 /// ```Event``` object is created as output of [EventStream]. There is no other way to create it.
