@@ -6,7 +6,7 @@
 //! The main purpose of the library is to provide foundation for my experimental GUI library
 //! [WAG](https://github.com/milyin/wag), but it's abstract enough to be used anywhere else.
 //!
-//! Library implements [CArc<T>](CArc) wrapper containing ```Arc<RwLock<T>``` inside.
+//! Library implements [CArc<T>](CArc) wrapper containing ```Arc<std::sync::RwLock<T>``` inside.
 //! ```CArc``` provides methods for accessing ```T``` both in synchronous and asynchronous ways.
 //! Sync methods [CArc::call] blocks calling thread, async ones [CArc::async_call] releases task if wrapper object
 //! is locked, allowing other async tasks to continue.
@@ -25,7 +25,7 @@
 //! struct DeepThought {
 //!     answer: usize,
 //! }
-//! 
+//!
 //! impl DeepThought {
 //!     fn status(&self) -> usize {
 //!         return self.answer;
@@ -49,10 +49,10 @@
 //!             println("The Answer Is {}", answer)   
 //!         }
 //!     }
-//!}) 
-//! 
+//!})
+//!
 //! ```
-//! 
+//!
 //!
 //! # Event ordering
 //!
@@ -85,7 +85,6 @@
 //! sent this source event is blocked until all derived events are dropped. So C2 click in example above is sent only when all instances of P1
 //! are destroyed. So click on "Close" button is sent only after "Apply" press button event is handled.  
 //!
-
 
 mod carc;
 mod earc;
